@@ -473,6 +473,95 @@ export function parsePortals(rawOverride) {
 // ---------------------------------------------------------------------------
 // pipeline.md management
 // ---------------------------------------------------------------------------
+function normalizePipelineToken(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hostFromUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function sourceFromUrl(url) {
+  const host = hostFromUrl(url);
+  if (!host) return 'unknown';
+  if (host.endsWith('linkedin.com')) return 'linkedin';
+  if (host.endsWith('glassdoor.com')) return 'glassdoor';
+  if (host === 'fractionaljobs.io' || host === 'www.fractionaljobs.io') return 'fractionaljobs';
+  if (host === 'builtin.com' || host === 'www.builtin.com') return 'builtin';
+  if (host === 'adzuna.com' || host === 'www.adzuna.com') return 'adzuna';
+  if (host.endsWith('ashbyhq.com')) return 'ashby';
+  if (host.includes('greenhouse.io')) return 'greenhouse';
+  if (host.includes('lever.co')) return 'lever';
+  if (host.includes('workdayjobs.com') || host.includes('myworkdayjobs.com')) return 'workday';
+  if (host.endsWith('lensa.com')) return 'lensa';
+  if (host.endsWith('substack.com')) return 'substack';
+  if (host.endsWith('beehiiv.com')) return 'beehiiv';
+  return host;
+}
+
+function sourceFromNote(note) {
+  if (!note || typeof note !== 'string') return '';
+  const match = note.match(/source:\s*([^;|]+)/i);
+  return match ? match[1].trim().toLowerCase() : '';
+}
+
+function parsePendingRow(line) {
+  const clean = String(line || '').replace(/^- \[[^\]]+\]\s*/, '');
+  const parts = clean.split(' | ').map((part) => part.trim());
+  const url = parts[0] || '';
+  const company = parts[1] || '';
+  const role = parts[2] || '';
+  if (!url || !role) return null;
+  return { url, company, role, note: parts.find((part) => /^note:\s*/i.test(part)) || '' };
+}
+
+function pendingRowKey(line) {
+  const row = parsePendingRow(line);
+  if (!row) return '';
+  const source = sourceFromNote(row.note) || sourceFromUrl(row.url);
+  const companyKey = normalizePipelineToken(row.company);
+  const roleKey = normalizePipelineToken(row.role);
+  if (!roleKey) return '';
+  return companyKey ? [companyKey, roleKey, source].join('::') : [roleKey, source].join('::');
+}
+
+function dedupePipelineMarkdown(text) {
+  const seen = new Set();
+  const out = [];
+  let inPending = false;
+
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === '## Pending') {
+      inPending = true;
+      out.push(line);
+      continue;
+    }
+    if (trimmed === '## Processed') {
+      inPending = false;
+      out.push(line);
+      continue;
+    }
+    if (inPending && /^- \[[ x]\]\s+https?:\/\//i.test(trimmed)) {
+      const key = pendingRowKey(line);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+    }
+    out.push(line);
+  }
+
+  return out.join('\n');
+}
+
 function readPipeline() {
   const content = readFile('data/pipeline.md') ?? '';
   const pending = [];
@@ -505,6 +594,7 @@ function addToPipeline(entries) {
   const seenUrls = new Set(history.split('\n').slice(1).map(l => l.split('\t')[0]).filter(Boolean));
 
   const existingPipeline = readFile('data/pipeline.md') ?? '# Pipeline\n\n## Pending\n';
+  const cleanedPipeline = dedupePipelineMarkdown(existingPipeline);
   const existingApps     = readFile('data/applications.md') ?? '';
   // extract URLs already tracked in applications.md (mirrors scan.mjs dedup logic)
   const appliedUrls = new Set(
@@ -517,17 +607,38 @@ function addToPipeline(entries) {
     if (seenUrls.has(e.url)) return false;
     if (appliedUrls.has(e.url)) return false;
     // skip if already queued in pipeline
-    if (existingPipeline.includes(e.url)) return false;
+    if (cleanedPipeline.includes(e.url)) return false;
     return true;
   });
 
-  if (newEntries.length === 0) return 0;
+  const seenKeys = new Set();
+  for (const line of cleanedPipeline.split('\n')) {
+    if (!/^-/u.test(line.trim())) continue;
+    const key = pendingRowKey(line);
+    if (key) seenKeys.add(key);
+  }
+
+  const dedupedEntries = [];
+  for (const entry of newEntries) {
+    const companyKey = normalizePipelineToken(entry.company);
+    const roleKey = normalizePipelineToken(entry.role);
+    const sourceKey = String(entry.source || 'scan').toLowerCase();
+    const key = companyKey ? [companyKey, roleKey, sourceKey].join('::') : [roleKey, sourceKey].join('::');
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    dedupedEntries.push(entry);
+  }
+
+  if (dedupedEntries.length === 0) {
+    if (cleanedPipeline !== existingPipeline) writeFile('data/pipeline.md', cleanedPipeline);
+    return 0;
+  }
 
   const today = new Date().toISOString().split('T')[0];
-  let pipeline = existingPipeline;
+  let pipeline = cleanedPipeline;
   let hist = history;
 
-  for (const e of newEntries) {
+  for (const e of dedupedEntries) {
     pipeline += `- [ ] ${e.url} | ${e.company} | ${e.role}\n`;
     hist     += `${e.url}\t${today}\tscan\t${e.role}\t${e.company}\tadded\t${e.location ?? ''}\n`;
   }

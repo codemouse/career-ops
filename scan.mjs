@@ -1534,7 +1534,7 @@ function postedAtIsoDate(postedAt) {
   if (typeof postedAt !== 'number' || !Number.isFinite(postedAt) || postedAt <= 0) return '';
   return new Date(postedAt).toISOString().slice(0, 10);
 }
-export function formatScanHistoryRow(offer, date, status = 'added') {
+export function formatScanHistoryRow(offer, date, status = 'added', addedAt = '') {
   return [
     normalizeScanUrl(offer.url),
     date,
@@ -1568,6 +1568,9 @@ export function formatScanHistoryRow(offer, date, status = 'added') {
     // cols) are unaffected, and older rows that lack it are tolerated by
     // consumers normalizing the raw name on the fly.
     normalizeCompanyName(offer.company || ''),
+    // Optional ingest timestamp. New rows get the actual append moment; older
+    // rows without the column remain readable and fall back to first_seen.
+    typeof addedAt === 'string' ? addedAt : '',
   ].map(sanitizeTsvField).join('\t');
 }
 
@@ -1616,11 +1619,120 @@ Paste job URLs below as \`- [ ] {url}\` then run \`/career-ops pipeline\`.
 const PENDING_MARKERS = ['## Pending', '## Pendientes'];
 const PROCESSED_MARKERS = ['## Processed', '## Procesadas'];
 
+export function dedupePipelineMarkdown(text) {
+  const lines = String(text ?? '').split(/\r?\n/);
+  const out = [];
+  const seen = new Set();
+  let inPending = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === '## Pending' || trimmed === '## Pendientes') {
+      inPending = true;
+      out.push(line);
+      continue;
+    }
+    if (trimmed === '## Processed' || trimmed === '## Procesadas') {
+      inPending = false;
+      out.push(line);
+      continue;
+    }
+
+    if (inPending && isPipelinePendingRow(line)) {
+      const key = pipelinePendingDedupKey(line);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+    }
+
+    out.push(line);
+  }
+
+  return out.join('\n');
+}
+
+function collectPipelinePendingKeys(text) {
+  const seen = new Set();
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (!isPipelinePendingRow(line)) continue;
+    const key = pipelinePendingDedupKey(line);
+    if (key) seen.add(key);
+  }
+  return seen;
+}
+
+function isPipelinePendingRow(line) {
+  return /^- \[[ x]\]\s+https?:\/\//i.test(String(line || '').trim());
+}
+
+function pipelinePendingDedupKey(line) {
+  const parsed = parsePipelinePendingRow(line);
+  if (!parsed) return '';
+  const source = inferPipelineSource(parsed);
+  const companyKey = normalizeCompany(parsed.company || '');
+  const roleKey = normalizeRoleForDedup(parsed.role || '');
+  if (!roleKey) return '';
+  if (companyKey) return [companyKey, roleKey, source].join('::');
+  return [roleKey, source].join('::');
+}
+
+function parsePipelinePendingRow(line) {
+  const clean = String(line || '').replace(/^- \[[^\]]+\]\s*/, '');
+  const parts = clean.split(' | ').map((p) => p.trim());
+  const url = parts[0] || '';
+  const company = parts[1] || '';
+  const role = parts[2] || '';
+  if (!url || !role) return null;
+  return {
+    url,
+    company,
+    role,
+    note: parts.find((p) => /^note:\s*/i.test(p)) || '',
+  };
+}
+
+function inferPipelineSource(item) {
+  const noteSource = sourceFromNote(String(item?.note || ''));
+  if (noteSource) return noteSource.toLowerCase();
+  return sourceFromUrl(String(item?.url || '')).toLowerCase();
+}
+
+function sourceFromNote(note) {
+  if (!note || typeof note !== 'string') return '';
+  const m = note.match(/source:\s*([^;|]+)/i);
+  return m ? m[1].trim() : '';
+}
+
+function sourceFromUrl(url) {
+  const host = hostFromUrl(url);
+  if (!host) return 'unknown';
+  if (host.endsWith('linkedin.com')) return 'LinkedIn';
+  if (host.endsWith('glassdoor.com')) return 'Glassdoor';
+  if (host === 'fractionaljobs.io' || host === 'www.fractionaljobs.io') return 'FractionalJobs';
+  if (host === 'builtin.com' || host === 'www.builtin.com') return 'BuiltIn';
+  if (host === 'adzuna.com' || host === 'www.adzuna.com') return 'Adzuna';
+  if (host.endsWith('ashbyhq.com')) return 'Ashby';
+  if (host.includes('greenhouse.io')) return 'Greenhouse';
+  if (host.includes('lever.co')) return 'Lever';
+  if (host.includes('workdayjobs.com') || host.includes('myworkdayjobs.com')) return 'Workday';
+  if (host.endsWith('lensa.com')) return 'Lensa';
+  if (host.endsWith('substack.com')) return 'Substack';
+  if (host.endsWith('beehiiv.com')) return 'Beehiiv';
+  return host;
+}
+
+function hostFromUrl(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 // Locked (pipeline-lock.mjs) so scan.mjs, scan-ats-full.mjs, and plugins.mjs
 // (pipeline mode) — the three current callers — can never interleave their
 // read-modify-write and silently drop each other's offers.
 export async function appendToPipeline(offers) {
-  if (offers.length === 0) return;
+  const inputOffers = Array.isArray(offers) ? offers : [];
 
   await withPipelineLock(PIPELINE_PATH, async () => {
     // Auto-create with standard skeleton if missing (fresh-install guard).
@@ -1628,7 +1740,26 @@ export async function appendToPipeline(offers) {
       writeFileSync(PIPELINE_PATH, PIPELINE_SKELETON, 'utf-8');
     }
 
-    let text = readFileSync(PIPELINE_PATH, 'utf-8');
+    const originalText = readFileSync(PIPELINE_PATH, 'utf-8');
+    let text = dedupePipelineMarkdown(originalText);
+    const existingKeys = collectPipelinePendingKeys(text);
+    const uniqueOffers = [];
+    const seenIncoming = new Set();
+
+    for (const offer of inputOffers) {
+      const companyKey = normalizeCompany(offer.company || '');
+      const roleKey = normalizeRoleForDedup(offer.title || '');
+      const sourceKey = inferPipelineSource({ url: offer.url, note: offer.note, source: offer.source });
+      const key = companyKey ? [companyKey, roleKey, sourceKey].join('::') : [roleKey, sourceKey].join('::');
+      if (!key || existingKeys.has(key) || seenIncoming.has(key)) continue;
+      seenIncoming.add(key);
+      uniqueOffers.push(offer);
+    }
+
+    if (uniqueOffers.length === 0) {
+      if (text !== originalText) writeFileSync(PIPELINE_PATH, text, 'utf-8');
+      return;
+    }
 
     const marker = PENDING_MARKERS.find(m => text.includes(m)) ?? null;
     const idx = marker !== null ? text.indexOf(marker) : -1;
@@ -1640,7 +1771,7 @@ export async function appendToPipeline(offers) {
         return (found === -1 || (i !== -1 && i < found)) ? i : found;
       }, -1);
       const insertAt = procIdx === -1 ? text.length : procIdx;
-      const block = `\n## Pending\n\n` + offers.map(formatPipelineOffer).join('\n') + '\n\n';
+      const block = `\n## Pending\n\n` + uniqueOffers.map(formatPipelineOffer).join('\n') + '\n\n';
       text = text.slice(0, insertAt) + block + text.slice(insertAt);
     } else {
       // Find the end of existing Pending content (next ## or end)
@@ -1648,7 +1779,7 @@ export async function appendToPipeline(offers) {
       const nextSection = text.indexOf('\n## ', afterMarker);
       const insertAt = nextSection === -1 ? text.length : nextSection;
 
-      const block = '\n' + offers.map(formatPipelineOffer).join('\n') + '\n';
+      const block = '\n' + uniqueOffers.map(formatPipelineOffer).join('\n') + '\n';
       text = text.slice(0, insertAt) + block + text.slice(insertAt);
     }
 
@@ -1657,11 +1788,12 @@ export async function appendToPipeline(offers) {
 }
 
 export function appendToScanHistory(offers, date, status = 'added') {
+  const addedAt = new Date().toISOString();
   // Ensure file + header exist. The header names every column the row writer
   // (formatScanHistoryRow) emits, in the same order: the original 7 positional
   // cols (url…location) plus the append-only trailing cols added since —
   // fingerprint (7), posted_at (8), trust_score (9), trust_flags (10),
-  // normalized_company (11). Written ONLY on fresh-file creation; existing files
+  // normalized_company (11), added_at (12). Written ONLY on fresh-file creation; existing files
   // (including headerless legacy files and older 7-col-header files) are never
   // rewritten. All readers either skip line 0 unconditionally, detect the header
   // by its `url\t` prefix, or skip non-URL col-0 rows, so widening it stays
@@ -1669,10 +1801,10 @@ export function appendToScanHistory(offers, date, status = 'added') {
   // outcomes (`skipped_expired`, etc.) without the legacy `(expired)` suffix.
   if (!existsSync(SCAN_HISTORY_PATH)) {
     mkdirSync(path.dirname(SCAN_HISTORY_PATH), { recursive: true });
-    writeFileSync(SCAN_HISTORY_PATH, 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\tfingerprint\tposted_at\ttrust_score\ttrust_flags\tnormalized_company\n', 'utf-8');
+    writeFileSync(SCAN_HISTORY_PATH, 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\tfingerprint\tposted_at\ttrust_score\ttrust_flags\tnormalized_company\tadded_at\n', 'utf-8');
   }
 
-  const lines = offers.map(o => formatScanHistoryRow(o, date, status)).join('\n') + '\n';
+  const lines = offers.map(o => formatScanHistoryRow(o, date, status, addedAt)).join('\n') + '\n';
 
   appendFileSync(SCAN_HISTORY_PATH, lines, 'utf-8');
 }
