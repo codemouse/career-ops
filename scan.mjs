@@ -2082,6 +2082,21 @@ function guardStatusFor(code) {
   return 'skipped_invalid_url';
 }
 
+// scanFlavorLine — a rotated one-line beat under "New offers added:", scaled
+// to haul size. Cosmetic only; trustHigh (from trust_filter, when configured)
+// just adds a note, never gates whether the line prints. Silent on a zero
+// haul — an empty scan isn't a moment worth narrating.
+function scanFlavorLine(count, trustHigh = 0) {
+  if (count <= 0) return null;
+  const pool = count >= 10
+    ? ['Big batch — worth setting aside real triage time.', "That's a lot of doors. Good problem to have."]
+    : count >= 3
+      ? ['Solid haul today.', 'A few worth a closer look.']
+      : ['Small batch, but it only takes one.', 'Quality over quantity — go take a look.'];
+  const base = pool[Math.floor(Math.random() * pool.length)];
+  return trustHigh > 0 ? `${base} (${trustHigh} flagged high-trust)` : base;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
@@ -2590,13 +2605,15 @@ async function main() {
     console.log(`Invalid (guarded):     ${invalidOffers.length} dropped`);
   }
   console.log(`New offers added:      ${verifiedOffers.length}`);
+  const scanTrustHigh = verifiedOffers.filter((o) => o.trustLevel === 'high').length;
+  const flavorLine = scanFlavorLine(verifiedOffers.length, scanTrustHigh);
+  if (flavorLine) console.log(flavorLine);
 
   // Trust validation summary (only when trust_filter is configured)
   if (config.trust_filter && config.trust_filter.enabled !== false && verifiedOffers.length > 0) {
-    const trustHigh = verifiedOffers.filter(o => o.trustLevel === 'high').length;
     const trustMedium = verifiedOffers.filter(o => o.trustLevel === 'medium').length;
     const trustLow = verifiedOffers.filter(o => o.trustLevel === 'low').length;
-    console.log(`Trust validation:      ${trustHigh} high, ${trustMedium} medium, ${trustLow} low`);
+    console.log(`Trust validation:      ${scanTrustHigh} high, ${trustMedium} medium, ${trustLow} low`);
     // Flag breakdown
     /** @type {Record<string, number>} */
     const flagCounts = {};

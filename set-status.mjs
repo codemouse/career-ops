@@ -105,6 +105,36 @@ const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "...
   once any row exists without a report. Prefer --row/--report (or the company
   name) over a bare number, and prefer any of them over --force.`;
 
+// ── milestone flourish ───────────────────────────────────────────
+// Human-mode-only (console.error, like the #1430 follow-up hint above it) —
+// never touches the --json contract. Reads the transition ledger this call
+// just appended to, so the count already includes the current event.
+const FIRST_TIME_STATES = new Set(['Interview', 'Offer']);
+const APPLIED_MILESTONES = new Set([10, 25, 50, 100, 250, 500, 1000]);
+
+function milestoneNote(logPath, newStatus) {
+  if (newStatus !== 'Applied' && newStatus !== 'Hired' && !FIRST_TIME_STATES.has(newStatus)) return null;
+  if (!existsSync(logPath)) return null;
+  let count = 0;
+  try {
+    for (const line of readFileSync(logPath, 'utf-8').split('\n')) {
+      if (line.split('\t')[3] === newStatus) count++;
+    }
+  } catch {
+    return null;
+  }
+  if (newStatus === 'Hired') return '🏆 Hired — the whole point of this exercise, right there.';
+  if (FIRST_TIME_STATES.has(newStatus) && count === 1) {
+    return newStatus === 'Interview'
+      ? '🎉 First interview on the board — the filter is working.'
+      : '🎉 First offer on the board.';
+  }
+  if (newStatus === 'Applied' && APPLIED_MILESTONES.has(count)) {
+    return `🚀 Application #${count} logged.`;
+  }
+  return null;
+}
+
 // ── argument parsing ─────────────────────────────────────────────
 
 const rawArgs = process.argv.slice(2);
@@ -483,12 +513,14 @@ if (changed && !flags.dryRun) {
 // the ledger next to the tracker it describes. Inside the lock window, so
 // concurrent writers can't interleave lines.
 let statusLogged = false;
+let milestone = null;
 if (statusChanged && !flags.dryRun) {
   const logPath = join(dirname(APPS_FILE), 'status-log.tsv');
   const eventDate = flags.on ?? new Date().toISOString().slice(0, 10);
   try {
     appendFileSync(logPath, `${target.num}\t${eventDate}\t${oldStatus}\t${newStatus}\tset-status\t\n`);
     statusLogged = true;
+    milestone = milestoneNote(logPath, newStatus);
   } catch (err) {
     console.error(`⚠ status-log append failed (status change itself succeeded): ${err.message}`);
   }
@@ -522,5 +554,6 @@ if (flags.json) {
   if (statusChanged && !flags.dryRun && newStatus === 'Applied') {
     console.error('ℹ️  Status is Applied — consider seeding follow-ups in data/follow-ups.md (#1430: node followup-cadence.mjs)');
   }
+  if (milestone) console.error(milestone);
 }
 process.exit(EXIT_OK);

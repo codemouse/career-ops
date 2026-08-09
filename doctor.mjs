@@ -27,6 +27,19 @@ const STRICT = argv.includes('--strict');
 // CLIs the doctor recognises.
 const VALID_CLIS = ['claude', 'codex', 'opencode', 'antigravity', 'grok', 'qwen', 'kimi', 'copilot', 'gemini'];
 
+// Rotated on every clean run so a repeat `npm run doctor` doesn't feel canned.
+// Purely cosmetic — never read by --json or any test, so free to edit/extend.
+const READY_LINES = [
+  "You're ready to go!",
+  'All green. Go find something worth applying to.',
+  'Clean bill of health.',
+  'Nothing standing between you and the job hunt now.',
+  'Fully wired up.',
+];
+function pick(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
 const cliIdx = argv.indexOf('--cli');
 const cliFlag = cliIdx !== -1 ? argv[cliIdx + 1] : null;
 
@@ -455,7 +468,7 @@ async function main() {
     process.exit(1);
   } else {
     const warnNote = warnings > 0 ? ` (${warnings} warning${warnings === 1 ? '' : 's'} — see above)` : '';
-    console.log(`Result: All checks passed${warnNote}. You're ready to go! Run \`claude\` (or \`opencode\`) to start.`);
+    console.log(`Result: All checks passed${warnNote}. ${pick(READY_LINES)} Run \`claude\` (or \`opencode\`) to start.`);
     console.log('');
     console.log('Join the community: https://discord.gg/8pRpHETxa4');
     console.log('Read the manifesto: `npm run manifesto` — a new way of job searching is taking shape, and you are now part of it.');

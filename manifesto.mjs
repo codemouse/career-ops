@@ -8,6 +8,41 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PAGE = 'https://career-ops.org/manifesto';
+const argv = process.argv.slice(2);
+
+// signatureStats — local read of the committed ledger, not a network call.
+// `n:` is the permanent per-signature ordinal (never reassigned, even when a
+// line is later removed — see SIGNATURES.md), so max(n)+1 is "the next spot
+// on the wall," not just a line count.
+function signatureStats(root) {
+  let lines;
+  try {
+    lines = readFileSync(join(root, 'SIGNATURES.md'), 'utf8')
+      .split('\n')
+      .filter((l) => l.startsWith('- @'));
+  } catch {
+    return null;
+  }
+  if (lines.length === 0) return null;
+  let maxN = 0;
+  for (const line of lines) {
+    const m = line.match(/\bn:(\d+)/);
+    if (m) maxN = Math.max(maxN, Number(m[1]));
+  }
+  const quoteMatch = lines[lines.length - 1].match(/"([^"]+)"/);
+  return { count: lines.length, nextOrdinal: maxN + 1, lastQuote: quoteMatch?.[1] ?? null };
+}
+
+if (argv.includes('--signatures')) {
+  const stats = signatureStats(here);
+  if (stats) {
+    console.log(`\n${stats.count} signatures on the wall so far.`);
+    console.log(`Sign now and you'd be #${stats.nextOrdinal}.`);
+    if (stats.lastQuote) console.log(`Most recent: "${stats.lastQuote}"`);
+  } else {
+    console.log('\nNo signatures recorded yet — you could be the first.');
+  }
+}
 
 try {
   const text = readFileSync(join(here, 'MANIFESTO.md'), 'utf8');
