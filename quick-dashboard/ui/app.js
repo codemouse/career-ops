@@ -65,8 +65,8 @@ const pipelineState = {
   processed: [],
   fitFilters: [],
   priorAppliedByCompany: {},
-  sortKey: 'company',
-  sortDir: 'asc',
+  sortKey: 'added',
+  sortDir: 'desc',
   query: '',
   hintIndex: 0,
 };
@@ -74,6 +74,12 @@ const pipelineState = {
 const trackerState = {
   sortKey: 'date',
   sortDir: 'desc',
+};
+
+const evaluateState = {
+  jobs: [],
+  selectedId: '',
+  nextId: 1,
 };
 
 const whimsyState = {
@@ -109,6 +115,7 @@ const rejectReasons = [
   { id: 'compensation-mismatch', label: 'Compensation mismatch', help: 'Compensation signal is too low or misaligned.' },
   { id: 'timing-mismatch', label: 'Not now / timing mismatch', help: 'Interesting role but wrong timing right now.' },
   { id: 'previously-applied', label: 'Previously Applied', help: 'You’ve already applied here and want to exclude repeat matches.' },
+  { id: 'no-longer-accepting', label: 'No Longer Accepting Applications', help: 'The posting is closed. Not a fit signal, so no filter is taught by default.' },
   { id: 'other', label: 'Already Applied', help: 'Use custom company/source/type/keywords filters for this pattern.' },
 ];
 
@@ -146,6 +153,18 @@ clearAllFiltersBtn?.addEventListener('click', () => {  pipelineFilters.source = 
   pipelineState.query = '';
   if (pipelineSearchInput) pipelineSearchInput.value = '';
   renderPipeline();
+});
+pendingTableBody?.addEventListener('click', (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return;
+  const jumpId = target.dataset.evalOpen || target.closest('[data-eval-open]')?.dataset.evalOpen;
+  if (!jumpId) return;
+  const job = evaluateState.jobs.find((entry) => entry.id === jumpId);
+  if (!job) return;
+  evaluateState.selectedId = job.id;
+  setActiveTab('evaluate');
+  renderEvaluationJobs();
+  renderEvaluationViewer();
 });
 pendingTable?.querySelectorAll('button[data-sort-key]').forEach((btn) => {
   btn.addEventListener('click', () => togglePipelineSort(btn.dataset.sortKey || 'company'));
@@ -254,7 +273,26 @@ function setActiveTab(tab) {
   document.body.classList.toggle('tab-analytics', tab === 'analytics');
   document.body.classList.toggle('tab-reports', tab === 'reports');
   document.body.classList.toggle('tab-evaluate', tab === 'evaluate');
+  if (tab === 'pipeline') renderPipeline();
   if (tab === 'analytics') renderAnalytics();
+}
+
+function showToast(message, type = 'success') {
+  const text = String(message || '').trim();
+  if (!text) return;
+  if (!toastRack) {
+    if (type === 'error') console.error(text);
+    else console.log(text);
+    return;
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = text;
+  toastRack.appendChild(toast);
+  window.setTimeout(() => toast.classList.add('is-visible'), 10);
+  window.setTimeout(() => toast.classList.remove('is-visible'), 2800);
+  window.setTimeout(() => toast.remove(), 3400);
 }
 
 async function loadAll() {
@@ -797,9 +835,11 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0) {
 
   if (allowProcess) {
     const row = el.querySelector('.item-actions');
-    row.appendChild(makeOpenPostingLink(item.url, openPostingLabel));
-    row.appendChild(makePipelineActionButton('Applied', item.raw, 'applied', 'action-applied'));
-    row.appendChild(makePipelineActionButton('Ignore', item.raw, 'remove', 'action-processed'));
+    const stack = el.querySelector('.action-stack');
+    stack?.prepend(makeInlineEvaluationStatus(item.url || item.originalUrl));
+    row.appendChild(makeOpenPostingLink(item, openPostingLabel));
+    row.appendChild(makePipelineActionButton('Applied', item, 'applied', 'action-applied'));
+    row.appendChild(makePipelineActionButton('Ignore', item, 'remove', 'action-processed'));
     row.appendChild(makeRejectActionButton(item));
     row.appendChild(makeEvaluateButton(item));
   }
@@ -936,13 +976,25 @@ function humanizeLocationHint(value) {
     .join(' ');
 }
 
-function makeOpenPostingLink(url, label) {
+function makeOpenPostingLink(item, label) {
+  const targetUrl = String(item?.url || item?.originalUrl || '').trim();
   const link = document.createElement('a');
   link.className = 'action-link action-open';
-  link.href = url;
+  link.href = targetUrl || '#';
   link.target = '_blank';
   link.rel = 'noopener';
+  link.dataset.openUrl = targetUrl;
   link.textContent = label;
+  link.addEventListener('click', (ev) => {
+    const href = String(link.dataset.openUrl || '').trim();
+    if (!href) {
+      ev.preventDefault();
+      showToast('No posting URL found for this row', 'error');
+      return;
+    }
+    // Ensure the clicked row URL always wins, even during rapid re-renders.
+    link.href = href;
+  });
   return link;
 }
 
@@ -990,13 +1042,20 @@ function formatAddedAt(value) {
 }
 
 function sortPipelineItems(items) {
-  const key = pipelineState.sortKey || 'company';
+  const key = pipelineState.sortKey || 'added';
   const dir = pipelineState.sortDir === 'desc' ? -1 : 1;
   return [...(items || [])].sort((a, b) => {
     const av = sortValueForItem(a, key);
     const bv = sortValueForItem(b, key);
     if (av < bv) return -1 * dir;
     if (av > bv) return 1 * dir;
+    if (key === 'company') return 0;
+    // Tie-break on company alphabetically so equal primary-sort rows don't
+    // reshuffle arbitrarily between renders.
+    const ac = sortValueForItem(a, 'company');
+    const bc = sortValueForItem(b, 'company');
+    if (ac < bc) return -1;
+    if (ac > bc) return 1;
     return 0;
   });
 }
@@ -1029,7 +1088,7 @@ function togglePipelineSort(sortKey) {
     pipelineState.sortDir = pipelineState.sortDir === 'asc' ? 'desc' : 'asc';
   } else {
     pipelineState.sortKey = sortKey;
-    pipelineState.sortDir = 'asc';
+    pipelineState.sortDir = sortKey === 'added' ? 'desc' : 'asc';
   }
   renderPipeline();
 }
@@ -1431,10 +1490,19 @@ function renderMetric(container, text) {
   container.appendChild(metric);
 }
 
-function makePipelineActionButton(label, rawItem, action, extraClass = '') {
+function makePipelineActionButton(label, item, action, extraClass = '') {
+  const rawItem = String(item?.raw || '').trim();
+  const itemUrl = String(item?.url || item?.originalUrl || '').trim();
+  const itemCompany = String(item?.company || '').trim();
+  const itemRole = String(item?.role || '').trim();
   const btn = document.createElement('button');
+  btn.type = 'button';
   btn.className = `secondary ${extraClass}`.trim();
   btn.textContent = label;
+  btn.dataset.pipelineRaw = rawItem;
+  btn.dataset.pipelineUrl = itemUrl;
+  btn.dataset.pipelineCompany = itemCompany;
+  btn.dataset.pipelineRole = itemRole;
   btn.addEventListener('click', async () => {
     try {
       let resumeNote = '';
@@ -1447,7 +1515,16 @@ function makePipelineActionButton(label, rawItem, action, extraClass = '') {
       row?.classList.add('is-celebrating');
       await api('/api/pipeline/process', {
         method: 'POST',
-        body: JSON.stringify({ item: rawItem, action, resumeNote }),
+        body: JSON.stringify({
+          item: {
+            raw: btn.dataset.pipelineRaw || '',
+            url: btn.dataset.pipelineUrl || '',
+            company: btn.dataset.pipelineCompany || '',
+            role: btn.dataset.pipelineRole || '',
+          },
+          action,
+          resumeNote,
+        }),
       });
       celebratePipelineAction(label, action);
       await loadPipeline();
@@ -1473,20 +1550,83 @@ function celebratePipelineAction(label, action) {
 
 function makeEvaluateButton(item) {
   const btn = document.createElement('button');
+  btn.type = 'button';
   btn.className = 'secondary action-evaluate';
   btn.textContent = 'Evaluate';
   btn.title = 'Run AI evaluation on this posting';
-  btn.addEventListener('click', () => {
+  const rowUrl = String(item?.url || item?.originalUrl || '').trim();
+  const rowSource = String(item?.source || inferSource(item) || 'pipeline').trim();
+  btn.dataset.evaluateUrl = rowUrl;
+  btn.dataset.evaluateSource = rowSource;
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const targetUrl = String(btn.dataset.evaluateUrl || '').trim();
+    const sourceLabel = String(btn.dataset.evaluateSource || 'pipeline').trim();
+    if (!targetUrl) {
+      showToast('No posting URL found for this row', 'error');
+      return;
+    }
     setActiveTab('evaluate');
     const urlInput = document.getElementById('evaluateUrl');
-    if (urlInput) urlInput.value = item.url || '';
-    runEvaluation(item.url);
+    if (urlInput) urlInput.value = targetUrl;
+    runEvaluation(targetUrl, { sourceLabel, focusJob: true });
   });
   return btn;
 }
 
+function makeInlineEvaluationStatus(url) {
+  const current = latestEvaluationForUrl(url);
+  const status = current?.status || '';
+  const wrap = document.createElement('div');
+  wrap.className = 'eval-inline-status';
+  if (!status) return wrap;
+
+  const label = document.createElement('button');
+  label.type = 'button';
+  label.className = `eval-inline-chip status-${status}`;
+  label.dataset.evalOpen = current.id;
+  label.title = 'Open this run in Evaluate tab';
+  if (status === 'running') {
+    const spinner = document.createElement('span');
+    spinner.className = 'eval-inline-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    label.appendChild(spinner);
+  }
+  label.appendChild(document.createTextNode(inlineStatusLabel(status)));
+  wrap.appendChild(label);
+  return wrap;
+}
+
+function latestEvaluationStatusForUrl(url) {
+  const match = latestEvaluationForUrl(url);
+  return match?.status || '';
+}
+
+function latestEvaluationForUrl(url) {
+  const normalized = String(url || '').trim();
+  if (!normalized) return '';
+  const job = evaluateState.jobs.find((entry) => String(entry.url || '').trim() === normalized);
+  return job || null;
+}
+
+function inlineStatusLabel(status) {
+  if (status === 'running') return 'Evaluating';
+  if (status === 'success') return 'Evaluated';
+  if (status === 'error') return 'Eval failed';
+  if (status === 'cancelled') return 'Cancelled';
+  return '';
+}
+
 function makeRejectActionButton(item) {
+  const rowPayload = {
+    raw: String(item?.raw || '').trim(),
+    url: String(item?.url || item?.originalUrl || '').trim(),
+    company: String(item?.company || '').trim(),
+    role: String(item?.role || '').trim(),
+  };
   const btn = document.createElement('button');
+  btn.type = 'button';
   btn.className = 'secondary action-reject';
   btn.textContent = 'Reject';
   btn.addEventListener('click', async () => {
@@ -1496,7 +1636,7 @@ function makeRejectActionButton(item) {
     try {
       await api('/api/pipeline/process', {
         method: 'POST',
-        body: JSON.stringify({ item: item.raw, action: 'reject', rejectRule: rule }),
+        body: JSON.stringify({ item: rowPayload, action: 'reject', rejectRule: hasAnyRuleScope(rule) ? rule : null }),
       });
       const refresh = await Promise.allSettled([loadPipeline(), loadFitFilters()]);
       const failedRefresh = refresh.find((r) => r.status === 'rejected');
@@ -1586,6 +1726,9 @@ function buildReasonFallbackRule(item, reasonId) {
   const roleKeywords = suggestRoleKeywords(reasonId, item);
   const locationKeywords = suggestLocationKeywords(reasonId, item);
 
+  if (reasonId === 'no-longer-accepting') {
+    return {};
+  }
   if (reasonId === 'company-stage' || reasonId === 'timing-mismatch' || reasonId === 'previously-applied') {
     return { company };
   }
@@ -1947,25 +2090,79 @@ const evaluateForm = document.getElementById('evaluateForm');
 const evaluateBtn = document.getElementById('evaluateBtn');
 const evaluateOutput = document.getElementById('evaluateOutput');
 const evaluateVerdict = document.getElementById('evaluateVerdict');
+const evaluateJobsMeta = document.getElementById('evaluateJobsMeta');
+const evaluateJobsList = document.getElementById('evaluateJobsList');
 
 evaluateForm?.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const url = document.getElementById('evaluateUrl')?.value?.trim();
   if (!url) return;
-  await runEvaluation(url);
+  runEvaluation(url, { sourceLabel: 'manual', focusJob: true });
+  if (evaluateBtn) {
+    evaluateBtn.textContent = 'Queued';
+    window.setTimeout(() => {
+      if (evaluateBtn) evaluateBtn.textContent = 'Run Evaluation';
+    }, 700);
+  }
 });
 
-async function runEvaluation(url) {
-  if (evaluateOutput) evaluateOutput.textContent = '';
-  if (evaluateVerdict) { evaluateVerdict.textContent = ''; evaluateVerdict.classList.add('is-hidden'); }
-  if (evaluateBtn) { evaluateBtn.disabled = true; evaluateBtn.textContent = 'Running…'; }
+evaluateJobsList?.addEventListener('click', (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return;
 
+  const selectId = target.dataset.evalSelect;
+  if (selectId) {
+    evaluateState.selectedId = selectId;
+    renderEvaluationJobs();
+    renderEvaluationViewer();
+    return;
+  }
+
+  const cancelId = target.dataset.evalCancel;
+  if (!cancelId) return;
+  const job = evaluateState.jobs.find((j) => j.id === cancelId);
+  if (!job || job.status !== 'running') return;
+  job.controller.abort();
+});
+
+function runEvaluation(url, options = {}) {
+  const targetUrl = String(url || '').trim();
+  if (!targetUrl) return null;
+
+  const sourceLabel = String(options.sourceLabel || 'pipeline').trim() || 'pipeline';
+  const job = {
+    id: `eval-${Date.now()}-${evaluateState.nextId++}`,
+    url: targetUrl,
+    sourceLabel,
+    status: 'running',
+    startedAt: Date.now(),
+    finishedAt: 0,
+    output: '',
+    verdict: '',
+    exitCode: null,
+    error: '',
+    controller: new AbortController(),
+  };
+
+  evaluateState.jobs.unshift(job);
+  if (options.focusJob !== false || !evaluateState.selectedId) evaluateState.selectedId = job.id;
+  renderEvaluationJobs();
+  renderEvaluationViewer();
+  refreshPipelineEvaluationIndicators();
+  startEvaluationJob(job);
+  showToast(`Evaluation started (${sourceLabel})`, 'success');
+  return job.id;
+}
+
+async function startEvaluationJob(job) {
   let fullText = '';
+
   try {
     const res = await fetch('/api/evaluate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url: job.url }),
+      signal: job.controller.signal,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -1994,36 +2191,151 @@ async function runEvaluation(url) {
           const payload = JSON.parse(evtData);
           if (evtType === 'text' && payload.text) {
             fullText += payload.text;
-            if (evaluateOutput) {
-              evaluateOutput.textContent = fullText;
-              evaluateOutput.scrollTop = evaluateOutput.scrollHeight;
-            }
+            job.output = fullText;
+            maybeRefreshEvaluationViewer(job.id);
           } else if (evtType === 'stderr' && payload.text) {
-            // show stderr faintly appended
-            if (evaluateOutput) evaluateOutput.textContent += `\n[stderr] ${payload.text}`;
+            fullText += `\n[stderr] ${payload.text}`;
+            job.output = fullText;
+            maybeRefreshEvaluationViewer(job.id);
           } else if (evtType === 'done') {
-            const verdict = extractVerdict(fullText);
-            if (verdict && evaluateVerdict) {
-              evaluateVerdict.textContent = verdict;
-              evaluateVerdict.classList.remove('is-hidden');
-            }
+            const verdict = extractVerdict(fullText) || '';
+            job.verdict = verdict;
+            job.exitCode = payload.code;
             if (payload.code === 0) {
+              job.status = 'success';
               showToast('Evaluation complete — report + tracker updated', 'success');
               reportsLoaded = false; // force reload on next visit
               loadTracker();
             } else {
+              job.status = 'error';
               showToast(`Evaluation exited with code ${payload.code}`, 'error');
             }
+            renderEvaluationJobs();
+            maybeRefreshEvaluationViewer(job.id);
+            refreshPipelineEvaluationIndicators();
           }
         } catch { /* ignore parse errors */ }
       }
     }
   } catch (err) {
-    if (evaluateOutput) evaluateOutput.textContent += `\n\nError: ${String(err.message || err)}`;
-    showToast(`Evaluation failed: ${err.message}`, 'error');
+    if (err?.name === 'AbortError') {
+      job.status = 'cancelled';
+      job.error = 'Cancelled by user.';
+      if (!job.output.trim()) job.output = '[cancelled] Evaluation cancelled by user.';
+      showToast('Evaluation cancelled', 'error');
+    } else {
+      job.status = 'error';
+      job.error = String(err?.message || err);
+      job.output += `\n\nError: ${job.error}`;
+      showToast(`Evaluation failed: ${job.error}`, 'error');
+    }
+    renderEvaluationJobs();
+    maybeRefreshEvaluationViewer(job.id);
+    refreshPipelineEvaluationIndicators();
   } finally {
-    if (evaluateBtn) { evaluateBtn.disabled = false; evaluateBtn.textContent = 'Run Evaluation'; }
+    if (job.status === 'running') {
+      job.status = job.exitCode === 0 ? 'success' : 'error';
+    }
+    job.finishedAt = Date.now();
+    renderEvaluationJobs();
+    maybeRefreshEvaluationViewer(job.id);
+    refreshPipelineEvaluationIndicators();
   }
+}
+
+function refreshPipelineEvaluationIndicators() {
+  if (!Array.isArray(pipelineState.pending) || pipelineState.pending.length === 0) return;
+  renderPipeline();
+}
+
+function maybeRefreshEvaluationViewer(jobId) {
+  if (evaluateState.selectedId === jobId) renderEvaluationViewer();
+}
+
+function renderEvaluationJobs() {
+  if (evaluateJobsMeta) {
+    const active = evaluateState.jobs.filter((j) => j.status === 'running').length;
+    const success = evaluateState.jobs.filter((j) => j.status === 'success').length;
+    const failed = evaluateState.jobs.filter((j) => j.status === 'error').length;
+    const cancelled = evaluateState.jobs.filter((j) => j.status === 'cancelled').length;
+    evaluateJobsMeta.textContent = `Running: ${active} | Done: ${success} | Failed: ${failed} | Cancelled: ${cancelled}`;
+  }
+
+  if (!evaluateJobsList) return;
+  if (!evaluateState.jobs.length) {
+    evaluateJobsList.innerHTML = '<div class="muted-cell">No evaluations started yet.</div>';
+    return;
+  }
+
+  evaluateJobsList.innerHTML = evaluateState.jobs.map((job) => {
+    const activeClass = evaluateState.selectedId === job.id ? ' is-active' : '';
+    const statusLabel = evalStatusLabel(job.status);
+    const running = job.status === 'running';
+    return `
+      <article class="eval-job${activeClass}">
+        <div class="eval-job-top">
+          <span class="eval-job-status status-${escapeAttr(job.status)}">${escapeHtml(statusLabel)}</span>
+          <span class="muted-cell">${escapeHtml(job.sourceLabel)}</span>
+        </div>
+        <div class="eval-job-url">${escapeHtml(compactUrl(job.url))}</div>
+        <div class="eval-job-actions">
+          <button type="button" class="secondary" data-eval-select="${escapeAttr(job.id)}">View</button>
+          ${running ? `<button type="button" class="secondary" data-eval-cancel="${escapeAttr(job.id)}">Cancel</button>` : ''}
+        </div>
+      </article>`;
+  }).join('');
+}
+
+function renderEvaluationViewer() {
+  const selected = evaluateState.jobs.find((j) => j.id === evaluateState.selectedId) || null;
+  if (!selected) {
+    if (evaluateVerdict) {
+      evaluateVerdict.textContent = '';
+      evaluateVerdict.classList.add('is-hidden');
+    }
+    if (evaluateOutput) evaluateOutput.textContent = 'No evaluation selected.';
+    return;
+  }
+
+  const verdict = selected.verdict || inferVerdictForJob(selected);
+  if (evaluateVerdict) {
+    if (verdict) {
+      evaluateVerdict.textContent = verdict;
+      evaluateVerdict.classList.remove('is-hidden');
+    } else {
+      evaluateVerdict.textContent = `Status: ${evalStatusLabel(selected.status)}`;
+      evaluateVerdict.classList.remove('is-hidden');
+    }
+  }
+
+  if (evaluateOutput) {
+    evaluateOutput.textContent = selected.output || '[waiting for evaluator output]';
+    evaluateOutput.scrollTop = evaluateOutput.scrollHeight;
+  }
+}
+
+function inferVerdictForJob(job) {
+  if (job.status === 'running') return '';
+  if (job.status === 'cancelled') return 'Evaluation cancelled';
+  if (job.status === 'error') {
+    const suffix = Number.isInteger(job.exitCode) ? ` (exit ${job.exitCode})` : '';
+    return `Evaluation failed${suffix}`;
+  }
+  return '';
+}
+
+function evalStatusLabel(status) {
+  if (status === 'running') return 'Running';
+  if (status === 'success') return 'Done';
+  if (status === 'cancelled') return 'Cancelled';
+  return 'Error';
+}
+
+function compactUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.length <= 94) return raw;
+  return `${raw.slice(0, 45)}...${raw.slice(-42)}`;
 }
 
 function extractVerdict(text) {

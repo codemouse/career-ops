@@ -6,6 +6,7 @@ import { resolve, dirname, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import yaml from 'js-yaml';
+import { cell } from '../tracker-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -87,7 +88,7 @@ function handleApi(req, res, path) {
   if (req.method === 'POST' && path === '/api/pipeline/process') {
     return readBody(req, res, ({ item, action, rejectRule, resumeNote }) => {
       if (!item) return json(res, 400, { error: 'item is required' });
-      const result = movePipelineItemToProcessed(String(item), String(action || 'processed'), rejectRule || null, resumeNote ? String(resumeNote) : '');
+      const result = movePipelineItemToProcessed(item, String(action || 'processed'), rejectRule || null, resumeNote ? String(resumeNote) : '');
       return json(res, result.ok ? 200 : 500, result);
     });
   }
@@ -542,7 +543,14 @@ function parsePipelineItem(line) {
   const host = hostFromUrl(url);
   const derivedRole = deriveRoleFromUrl(url, host);
   const derivedCompany = deriveCompanyFromUrl(url, host);
-  const resolvedCompany = shouldUseDerivedCompany(initialCompany, host) && derivedCompany ? derivedCompany : initialCompany;
+  // Some boards (BuiltIn, Adzuna, ...) don't encode the employer in the URL at
+  // all -- only the job title. When the pipeline hint is untrustworthy (it's
+  // literally the board's own name, e.g. "Builtin") and the URL yields nothing
+  // better, check whether this exact posting was already evaluated: reports/
+  // carry the real employer the evaluator extracted from the JD itself.
+  const resolvedCompany = shouldUseDerivedCompany(initialCompany, host)
+    ? (derivedCompany || companyFromReportUrl(url) || '')
+    : initialCompany;
   const resolvedRole = shouldUseDerivedRole(initialRole) && derivedRole ? derivedRole : initialRole;
 
   const parsed = {
@@ -871,25 +879,45 @@ function readStates() {
   return (doc?.states || []).map((s) => s.label);
 }
 
-function movePipelineItemToProcessed(rawItemLine, action = 'processed', rejectRuleInput = null, resumeNote = '') {
+function movePipelineItemToProcessed(itemTarget, action = 'processed', rejectRuleInput = null, resumeNote = '') {
   try {
     const file = resolve(root, 'data', 'pipeline.md');
     const textBody = readFileSync(file, 'utf8');
     const lines = textBody.split(/\r?\n/);
 
-    const normalizedTarget = rawItemLine.trim();
+    const target = normalizePipelineItemTarget(itemTarget);
+    const normalizedTarget = target.raw;
     let targetIndex = -1;
     let processedHeaderIndex = -1;
     let fallbackTarget = null;
 
     if (normalizedTarget) {
       fallbackTarget = parsePipelineItem(normalizedTarget);
+    } else if (target.url || target.company || target.role) {
+      fallbackTarget = {
+        url: target.url,
+        company: target.company,
+        role: target.role,
+      };
     }
 
     for (let i = 0; i < lines.length; i++) {
       const t = lines[i].trim();
       if (t === '## Processed') processedHeaderIndex = i;
       if (t === normalizedTarget) targetIndex = i;
+    }
+
+    if (targetIndex === -1 && fallbackTarget?.url) {
+      const normalizedUrl = String(fallbackTarget.url || '').trim();
+      for (let i = 0; i < lines.length; i++) {
+        const t = lines[i].trim();
+        if (!t.startsWith('- [')) continue;
+        const parsed = parsePipelineItem(t);
+        if (String(parsed.url || '').trim() === normalizedUrl) {
+          targetIndex = i;
+          break;
+        }
+      }
     }
 
     if (targetIndex === -1 && fallbackTarget?.url) {
@@ -943,6 +971,24 @@ function movePipelineItemToProcessed(rawItemLine, action = 'processed', rejectRu
   } catch (err) {
     return { ok: false, error: String(err.message || err) };
   }
+}
+
+function normalizePipelineItemTarget(input) {
+  if (input && typeof input === 'object') {
+    return {
+      raw: String(input.raw || '').trim(),
+      url: String(input.url || '').trim(),
+      company: String(input.company || '').trim(),
+      role: String(input.role || '').trim(),
+    };
+  }
+
+  return {
+    raw: String(input || '').trim(),
+    url: '',
+    company: '',
+    role: '',
+  };
 }
 
 function readFitFilters() {
@@ -1037,7 +1083,10 @@ function addOrUpdateTrackerAppliedFromPipelineLine(rawLine, resumeNote = '') {
 
     const trackerLines = readFileSync(trackerPath, 'utf8').split(/\r?\n/);
     const today = new Date().toISOString().slice(0, 10);
-    const noteText = resumeNote ? `Applied from dashboard | Resume: ${resumeNote}` : 'Applied from dashboard pipeline action';
+    // cell() strips/replaces literal "|" (and newlines) from free text -- a
+    // raw "|" here would split into an extra table column and corrupt every
+    // later cell on the row, exactly like row #7's malformed "|" separator did.
+    const noteText = cell(resumeNote ? `Applied from dashboard; Resume: ${resumeNote}` : 'Applied from dashboard pipeline action');
 
     let maxNum = 0;
     let existingRowIndex = -1;
@@ -1061,14 +1110,15 @@ function addOrUpdateTrackerAppliedFromPipelineLine(rawLine, resumeNote = '') {
       const cols = trackerLines[existingRowIndex].split('|').slice(1, -1).map((c) => c.trim());
       cols[5] = 'Applied';
       const existingNotes = (cols[8] || '').trim();
-      cols[8] = resumeNote ? `${existingNotes ? existingNotes + ' | ' : ''}Resume: ${resumeNote}` : (existingNotes || noteText);
+      const resumePart = resumeNote ? cell(`Resume: ${resumeNote}`) : '';
+      cols[8] = resumePart ? `${existingNotes ? existingNotes + '; ' : ''}${resumePart}` : (existingNotes || noteText);
       trackerLines[existingRowIndex] = `| ${cols.join(' | ')} |`;
       writeFileSync(trackerPath, trackerLines.join('\n'));
       return { ok: true, updated: true };
     }
 
     const nextNum = maxNum + 1;
-    const newRow = `| ${nextNum} | ${today} | ${company} | ${role} | N/A | Applied | ❌ | - | ${noteText} |`;
+    const newRow = `| ${nextNum} | ${today} | ${cell(company)} | ${cell(role)} | N/A | Applied | ❌ | - | ${noteText} |`;
 
     let insertAt = trackerLines.length;
     for (let i = trackerLines.length - 1; i >= 0; i--) {
@@ -1266,6 +1316,48 @@ function bulkImportFromWorkbook(filePath) {
   writeFileSync(trackerFile, updated, 'utf8');
 
   return { ok: true, added: toAdd.length, message: `Imported ${toAdd.length} entries from 2026 sheet.` };
+}
+
+let reportUrlIndexCache = null;
+let reportUrlIndexKey = '';
+
+function normalizeUrlForMatch(url) {
+  try {
+    const u = new URL(String(url || '').trim());
+    return `${u.hostname.replace(/^www\./, '').toLowerCase()}${u.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return String(url || '').trim().toLowerCase();
+  }
+}
+
+// Maps posting URL -> employer name already extracted (from the JD itself,
+// not the board) by a past evaluation. Rebuilt only when reports/ changes.
+function reportUrlIndex() {
+  const dir = resolve(root, 'reports');
+  if (!existsSync(dir)) return new Map();
+  const files = readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
+  const key = files.join(',');
+  if (reportUrlIndexCache && reportUrlIndexKey === key) return reportUrlIndexCache;
+
+  const index = new Map();
+  for (const filename of files) {
+    try {
+      const lines = readFileSync(resolve(dir, filename), 'utf8').split('\n').slice(0, 15);
+      const urlLine = lines.find((l) => l.startsWith('**URL:**'));
+      const companyLine = lines.find((l) => l.startsWith('# Evaluation:'));
+      if (!urlLine || !companyLine) continue;
+      const reportUrl = urlLine.replace('**URL:**', '').trim();
+      const company = (companyLine.replace('# Evaluation:', '').trim().split('—')[0] || '').trim();
+      if (reportUrl && company) index.set(normalizeUrlForMatch(reportUrl), company);
+    } catch { /* skip unreadable report */ }
+  }
+  reportUrlIndexCache = index;
+  reportUrlIndexKey = key;
+  return index;
+}
+
+function companyFromReportUrl(url) {
+  return reportUrlIndex().get(normalizeUrlForMatch(url)) || '';
 }
 
 function listReports() {
