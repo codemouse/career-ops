@@ -10,7 +10,7 @@ import yaml from 'js-yaml';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const publicDir = resolve(__dirname, 'ui');
-const webDataDir = resolve(root, '.career-ops-web');
+const webDataDir = resolve(root, '.career-ops-quick-dashboard');
 const fitFiltersPath = resolve(webDataDir, 'fit-filters.json');
 const excludedPendingSources = new Set(['Glassdoor']);
 const defaultAppliedWorkbookPath = resolve(process.env.HOME || '', 'Downloads', '2026 Job Search.xlsx');
@@ -33,7 +33,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`CareerOps Web Dashboard running at http://localhost:${port}`);
+  console.log(`CareerOps Quick Dashboard running at http://localhost:${port}`);
 });
 
 function handleApi(req, res, path) {
@@ -1301,7 +1301,7 @@ function listReports() {
 }
 
 function buildEvalPrompt(url, today) {
-  const memFile = resolve(root, '.career-ops-web', 'memory.json');
+  const memFile = resolve(root, '.career-ops-quick-dashboard', 'memory.json');
   let memory = '';
   try { memory = existsSync(memFile) ? JSON.parse(readFileSync(memFile, 'utf8')).content || '' : ''; } catch { /* ignore */ }
   const mem = memory.trim() ? `\n\nDurable notes about the user (from their profile):\n${memory.trim()}\n` : '';

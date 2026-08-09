@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CareerOps Dashboard</title>
+  <title>CareerOps Quick Dashboard</title>
   <link rel="stylesheet" href="/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 </head>
@@ -20,7 +20,7 @@
         <span class="mascot-spark mascot-spark-b"></span>
       </div>
       <div>
-        <h1 id="dashboardTitle">CareerOps Dashboard</h1>
+        <h1 id="dashboardTitle">CareerOps Quick Dashboard</h1>
         <p id="brandTagline" class="brand-tagline">Chaos-tested. Goblin-approved.</p>
       </div>
     </div>
@@ -191,6 +191,8 @@
             </label>
             <button type="submit" id="evaluateBtn">Run Evaluation</button>
           </form>
+          <div id="evaluateJobsMeta" class="evaluate-jobs-meta">No evaluations running.</div>
+          <div id="evaluateJobsList" class="evaluate-jobs-list"></div>
           <div id="evaluateVerdict" class="evaluate-verdict is-hidden"></div>
           <pre id="evaluateOutput" class="log eval-log"></pre>
         </section>

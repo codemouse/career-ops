@@ -1321,6 +1321,69 @@ body.chaos-polish .card {
   min-width: 240px;
 }
 
+.evaluate-jobs-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 10px;
+}
+
+.evaluate-jobs-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.eval-job {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.eval-job.is-active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 16%, transparent);
+}
+
+.eval-job-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.eval-job-status {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.eval-job-status.status-running { background: #e7f5ff; color: #1864ab; }
+.eval-job-status.status-success { background: #ebfbee; color: #2b8a3e; }
+.eval-job-status.status-error { background: #fff5f5; color: #c92a2a; }
+.eval-job-status.status-cancelled { background: #f8f9fa; color: #495057; }
+
+.eval-job-url {
+  margin: 8px 0;
+  font-size: 0.74rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.eval-job-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.eval-job-actions button {
+  font-size: 0.74rem;
+  padding: 4px 8px;
+}
+
 .evaluate-verdict {
   background: linear-gradient(135deg, var(--brand), var(--brand-strong));
   color: #fff;

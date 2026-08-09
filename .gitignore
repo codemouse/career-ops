@@ -134,8 +134,11 @@ playwright-report/
 # Planning (local scratchpad)
 plan/
 
-# Web — runtime cache/history the dashboard writes locally; nothing here is tracked.
+# Web — runtime cache/scratch data the web/ Next.js app writes locally; nothing here is tracked.
 .career-ops-web/
+
+# Quick dashboard — runtime cache/history quick-dashboard/ writes locally; nothing here is tracked.
+.career-ops-quick-dashboard/
 
 # Upgrade-test fixtures are fictional system-layer data, never user data
 # (see DATA_CONTRACT.md). Re-include them past the unanchored user-layer

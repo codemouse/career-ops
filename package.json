@@ -61,7 +61,7 @@
     "prepare:application": "node prepare-application.mjs",
     "application:init": "node application-artifacts.mjs --init",
     "build:dashboard": "node build-dashboard.mjs",
-    "serve:dashboard:web": "node web-dashboard/server.mjs",
+    "serve:dashboard:quick": "node quick-dashboard/server.mjs",
     "serve:dashboard": "cd dashboard && go run . --path ..",
     "postinstall": "npx playwright install chromium --with-deps || npx playwright install chromium --with-deps",
     "manifesto": "node manifesto.mjs"

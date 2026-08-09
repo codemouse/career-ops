@@ -1,12 +1,12 @@
-# CareerOps Web Dashboard
+# CareerOps Quick Dashboard
 
-Lightweight local web UI for reviewing scan results and taking actions without leaving the browser.
+Lightweight local web UI for reviewing scan results and taking actions without leaving the browser. Distinct from `dashboard/` (the Go terminal UI) and `web/` (the full Next.js app) — this is the minimal, no-build-step one.
 
 ## Start
 
 From the repo root:
 
-npm run serve:dashboard:web
+npm run serve:dashboard:quick
 
 Then open:
 
