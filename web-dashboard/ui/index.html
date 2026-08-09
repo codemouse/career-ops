@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareerOps Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-lockup">
+      <div class="mascot" aria-hidden="true">
+        <span class="mascot-halo"></span>
+        <span class="mascot-body"></span>
+        <span class="mascot-eye mascot-eye-left"></span>
+        <span class="mascot-eye mascot-eye-right"></span>
+        <span class="mascot-mouth"></span>
+        <span class="mascot-spark mascot-spark-a"></span>
+        <span class="mascot-spark mascot-spark-b"></span>
+      </div>
+      <div>
+        <h1 id="dashboardTitle">CareerOps Dashboard</h1>
+        <p id="brandTagline" class="brand-tagline">Chaos-tested. Goblin-approved.</p>
+      </div>
+    </div>
+    <div id="whimsyMeter" class="whimsy-meter" aria-live="polite" aria-label="Pipeline whimsy meter">
+      <span class="meter-label">Chaos Level</span>
+      <span class="meter-track" aria-hidden="true"><span id="whimsyMeterFill" class="meter-fill"></span></span>
+      <span id="whimsyMeterText" class="meter-value">Calibrating...</span>
+      <span id="goblinFortune" class="goblin-fortune">Fortune loading...</span>
+    </div>
+    <div class="theme-picker" role="group" aria-label="Theme preset">
+      <button type="button" class="theme-btn active" data-theme="calm">Calm</button>
+      <button type="button" class="theme-btn" data-theme="gremlin">Gremlin</button>
+      <button type="button" class="theme-btn" data-theme="turbo">Turbo</button>
+    </div>
+    <div class="actions">
+      <a class="toplink" href="/download/recruiter-resume" target="_blank" rel="noopener">Recruiter Resume</a>
+      <a class="toplink" href="/download/full-resume" target="_blank" rel="noopener">Full Resume</a>
+      <button id="refreshBtn">Refresh</button>
+      <button id="scanBtn">Run Scan</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card" id="tabCard">
+      <div class="tab-row" role="tablist" aria-label="Dashboard Views">
+        <button id="pipelineTabBtn" class="tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="pipelinePanel">Pending Pipeline</button>
+        <button id="manageTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="managePanel">Tracker + Status</button>
+        <button id="analyticsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="analyticsPanel">Analytics</button>
+        <button id="reportsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="reportsPanel">Reports</button>
+        <button id="evaluateTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="evaluatePanel">Evaluate</button>
+      </div>
+
+      <div id="pipelinePanel" class="tab-panel" role="tabpanel" aria-labelledby="pipelineTabBtn">
+        <section class="card" id="startCard">
+          <h2 class="section-title mascot-friend">CareerOps Start Here</h2>
+          <div id="opsChecklist" class="chips"></div>
+          <div class="actions" style="margin-bottom:10px; flex-wrap: wrap;">
+            <button id="baselineRefreshBtn" type="button">Refresh Baseline</button>
+            <button id="runVerifyPipelineBtn" class="secondary" type="button">Run Verify Pipeline</button>
+            <button id="runVerifyPortalsBtn" class="secondary" type="button">Run Verify Portals</button>
+            <button id="runStatsBtn" class="secondary" type="button">Run Stats Summary</button>
+          </div>
+          <pre id="opsOutput" class="log"></pre>
+        </section>
+
+        <section class="card" id="pipelineCard">
+          <h2 class="section-title mascot-friend">Pipeline Pending</h2>
+          <div class="pipeline-toolbar">
+            <label class="pipeline-search">
+              Search
+              <input id="pipelineSearchInput" placeholder="Search company, role, source, location" />
+            </label>
+            <label class="pipeline-filter">
+              Source
+              <select id="sourceFilterSelect"></select>
+            </label>
+            <label class="pipeline-filter">
+              Type
+              <select id="typeFilterSelect"></select>
+            </label>
+            <button id="clearAllFiltersBtn" class="secondary" type="button">Clear All Filters</button>
+            <button id="addToPipelineBtn" type="button">+ Add Job</button>
+          </div>
+          <div id="pendingSummary" class="chips"></div>
+          <div id="fitFilterSummary" class="chips"></div>
+          <div id="goblinHint" class="goblin-hint" aria-live="polite"></div>
+          <div class="table-wrap pipeline-table-wrap">
+            <table id="pendingTable" class="pipeline-table">
+              <thead>
+                <tr>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="source">Source</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="added">Added</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="company">Company</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="role">Title</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="employmentType">Type</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="location">Location</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="posted">Posted</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="flags">Flags</button></th>
+                  <th scope="col" class="actions-col">Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div id="managePanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="manageTabBtn">
+        <section class="card" id="trackerCard">
+          <h2 class="section-title mascot-friend">Applications Tracker</h2>
+          <div id="trackerSummary" class="chips"></div>
+          <div class="table-wrap">
+            <table id="trackerTable">
+              <thead>
+                <tr>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="num">#</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="date">Date</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="company">Company</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="role">Role</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="score">Score</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="status">Status</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="notes">Notes</button></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="section-title mascot-friend">Status Action</h2>
+          <form id="statusForm">
+            <label>
+              Selector (report # or company)
+              <input id="selectorInput" required placeholder="e.g. 042 or Celonis" />
+            </label>
+            <label>
+              New Status
+              <select id="stateSelect" required></select>
+            </label>
+            <label>
+              Note (optional)
+              <input id="noteInput" placeholder="Short note" />
+            </label>
+            <button type="submit">Update Status</button>
+          </form>
+          <pre id="statusOutput" class="log"></pre>
+        </section>
+      </div>
+
+      <div id="analyticsPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="analyticsTabBtn">
+        <section class="card">
+          <h2 class="section-title mascot-friend">Pipeline Funnel</h2>
+          <div id="funnelChart" class="chart-wrap"></div>
+        </section>
+        <section class="card">
+          <h2 class="section-title mascot-friend">Score Distribution</h2>
+          <div id="scoreChart" class="chart-wrap"></div>
+        </section>
+        <section class="card">
+          <h2 class="section-title mascot-friend">Top Companies by Score</h2>
+          <div id="topCompaniesChart" class="chart-wrap"></div>
+        </section>
+      </div>
+
+      <div id="reportsPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="reportsTabBtn">
+        <section class="card reports-layout">
+          <div class="reports-list-col">
+            <h2 class="section-title mascot-friend">Evaluation Reports</h2>
+            <div id="reportsList" class="reports-list"></div>
+          </div>
+          <div class="reports-viewer-col">
+            <div id="reportsViewer" class="reports-viewer">
+              <p class="reports-empty-hint">Select a report to read it.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="evaluatePanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="evaluateTabBtn">
+        <section class="card">
+          <h2 class="section-title mascot-friend">Evaluate a Job Posting</h2>
+          <p class="section-sub">Runs the full career-ops evaluation (modes/oferta.md) via Claude and persists the report + tracker row — identical to a CLI run.</p>
+          <form id="evaluateForm" class="evaluate-form">
+            <label>
+              Job posting URL
+              <input id="evaluateUrl" type="url" required placeholder="https://boards.greenhouse.io/..." />
+            </label>
+            <button type="submit" id="evaluateBtn">Run Evaluation</button>
+          </form>
+          <div id="evaluateVerdict" class="evaluate-verdict is-hidden"></div>
+          <pre id="evaluateOutput" class="log eval-log"></pre>
+        </section>
+      </div>
+
+    </section>
+  </main>
+
+  <dialog id="rejectModal" class="reject-modal">
+    <form id="rejectForm" class="reject-form">
+      <h3>Reject and Teach Filters</h3>
+      <p class="reject-subtitle">Choose why this is not a fit, then pick what should be auto-excluded next time.</p>
+
+      <label>
+        Reason
+        <select id="rejectReasonSelect" required></select>
+      </label>
+
+      <div id="rejectReasonHelp" class="reject-reason-help"></div>
+
+      <div class="reject-options">
+        <label><input type="checkbox" id="rejectCompanyChk" /> Exclude this company</label>
+        <label><input type="checkbox" id="rejectSourceChk" /> Exclude this source</label>
+        <label><input type="checkbox" id="rejectTypeChk" /> Exclude this job type</label>
+      </div>
+
+      <label>
+        Role keywords to exclude (comma-separated)
+        <input id="rejectRoleKeywords" placeholder="e.g. head of sales, sales director" />
+      </label>
+
+      <label>
+        Location keywords to exclude (comma-separated)
+        <input id="rejectLocationKeywords" placeholder="e.g. onsite, berlin" />
+      </label>
+
+      <div class="actions reject-actions">
+        <button type="button" id="rejectCancelBtn" class="secondary">Cancel</button>
+        <button type="submit" id="rejectConfirmBtn">Reject + Save Filters</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="resumePickerModal" class="add-job-modal">
+    <form id="resumePickerForm" class="add-job-form">
+      <h3>Which resume did you send?</h3>
+      <p class="section-sub" style="margin:0 0 4px">Tracked in notes on the application row.</p>
+      <label>
+        Resume file
+        <select id="resumePickerSelect"></select>
+      </label>
+      <label id="resumeManualLabel" class="is-hidden">
+        Manual filename
+        <input id="resumeManualInput" placeholder="e.g. brian-tailored-acme-v2.pdf" autocomplete="off" />
+      </label>
+      <div class="actions reject-actions">
+        <button type="button" id="resumePickerCancelBtn" class="secondary">Cancel</button>
+        <button type="submit" id="resumePickerSubmitBtn">Mark Applied</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="addJobModal" class="add-job-modal">
+    <form id="addJobForm" class="add-job-form">
+      <h3>Add Job to Pipeline</h3>
+      <label>
+        Job posting URL <span class="required-mark">*</span>
+        <input id="addJobUrl" type="url" required placeholder="https://..." autocomplete="off" />
+      </label>
+      <label>
+        Company
+        <input id="addJobCompany" placeholder="e.g. Acme Corp" autocomplete="off" />
+      </label>
+      <label>
+        Role / Title
+        <input id="addJobRole" placeholder="e.g. VP of Engineering" autocomplete="off" />
+      </label>
+      <label>
+        Location
+        <input id="addJobLocation" placeholder="e.g. Remote, United States" autocomplete="off" />
+      </label>
+      <div class="actions reject-actions">
+        <button type="button" id="addJobCancelBtn" class="secondary">Cancel</button>
+        <button type="submit" id="addJobSubmitBtn">Add to Pipeline</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toastRack" class="toast-rack" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
