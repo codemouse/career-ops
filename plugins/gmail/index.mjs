@@ -22,6 +22,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import {
   extractUrls, canonicalJobUrl, isAuthenticEmail, parseRoleAtCompany,
   getMessageBody, companyFromUrl, senderDomain, companyFromSender, sourceFromSender,
+  isKnownBoardName,
 } from './_helpers.mjs';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -160,10 +161,14 @@ export default {
         if (seenUrls.has(url)) continue;
         seenUrls.add(url);
         const note = shouldWriteSourceNote(sourceLabel, url, fromDomain) ? `source: ${sourceLabel}` : '';
+        // Digest subjects sometimes read "{Role} at Built In" — "Built In" there
+        // names the board the alert came from, not the employer, so it must not
+        // win over a genuinely empty company field.
+        const seedCompany = seed && !isKnownBoardName(seed.company) ? seed.company : '';
         jobs.push({
           title: seed?.role || 'Job lead (email)',
           url,
-          company: companyFromUrl(url) || seed?.company || companyFromSender(fromDomain) || '',
+          company: companyFromUrl(url) || seedCompany || companyFromSender(fromDomain) || '',
           location: '',
           note,
         });

@@ -97,6 +97,12 @@ function canonicalJobUrlDepth(url, depth) {
       return null;
     }
 
+    // The Collective Inc (FractionalJobs affiliate funnel): every link resolves
+    // to a generic landing page, never a specific posting. Drop at the source.
+    if (host.endsWith('.sjv.io') || host === 'indecollective.net' || host === 'www.indecollective.net') {
+      return null;
+    }
+
     if (host === 'fonts.googleapis.com' || host === 'fonts.gstatic.com' || host.endsWith('.gstatic.com')) {
       return null;
     }
@@ -306,6 +312,31 @@ export function sourceFromSender(headers) {
   return fromName || domain || '';
 }
 
+// Job boards / aggregators whose own name must never be written into the
+// `company` field — a lead sourced from one of these is a *source*, not an
+// employer. Keep in sync with the domainMap in sourceFromSender() above.
+const KNOWN_BOARD_NAMES = new Set([
+  'builtin', 'built in',
+  'linkedin',
+  'glassdoor',
+  'indeed',
+  'adzuna',
+  'lensa',
+  'fractionaljobs', 'fractional jobs',
+  'jotform',
+  'substack',
+  'beehiiv',
+]);
+
+/**
+ * Is this string a job board / aggregator name rather than a real employer?
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isKnownBoardName(name) {
+  return KNOWN_BOARD_NAMES.has(String(name || '').trim().toLowerCase().replace(/\s+/g, ' '));
+}
+
 /**
  * Best effort company hint from sender domain for non-ATS links.
  * @param {string} domain
@@ -313,11 +344,12 @@ export function sourceFromSender(headers) {
  */
 export function companyFromSender(domain) {
   if (!domain) return '';
-  const blocked = ['linkedin.com', 'glassdoor.com', 'indeed.com', 'gmail.com'];
+  const blocked = ['linkedin.com', 'glassdoor.com', 'indeed.com', 'gmail.com', 'builtin.com', 'adzuna.com', 'lensa.com'];
   if (blocked.some(d => domain.endsWith(d))) return '';
   const core = domain.split('.').slice(0, -1).pop() || '';
   if (!core || core.length < 3) return '';
-  return core.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const name = core.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return isKnownBoardName(name) ? '' : name;
 }
 
 /**
