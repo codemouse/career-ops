@@ -120,7 +120,19 @@ async function cmdList() {
 
 async function cmdRun(args) {
   const dryRun = args.includes('--dry-run');
-  const positional = args.filter(a => a !== '--dry-run');
+  const timeoutIdx = args.indexOf('--timeout-ms');
+  const timeoutRaw = timeoutIdx >= 0 ? args[timeoutIdx + 1] : null;
+  const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+  if (timeoutRaw && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+    console.error(`Invalid --timeout-ms value: ${timeoutRaw}`);
+    process.exit(1);
+  }
+  const positional = args.filter((a, i) => {
+    if (a === '--dry-run') return false;
+    if (a === '--timeout-ms') return false;
+    if (timeoutIdx >= 0 && i === timeoutIdx + 1) return false;
+    return true;
+  });
   const id = positional[0];
   if (!id) { console.error('Usage: node plugins.mjs run <id> [hook] [args…] [--dry-run]'); process.exit(1); }
 
@@ -154,7 +166,7 @@ async function cmdRun(args) {
   if (hook === 'ingest' || hook === 'search') {
     const payload = hook === 'search' ? positional.slice(hookArgStart).join(' ') : undefined;
     if (hook === 'search' && !payload) { console.error(`search needs a query: node plugins.mjs run ${id} search "<query>"`); process.exit(1); }
-    const results = await runHook(hook, payload, { root: ROOT, dryRun });
+    const results = await runHook(hook, payload, { root: ROOT, dryRun, timeoutMs });
     const found = results.filter(r => r.ok && Array.isArray(r.result)).flatMap(r => r.result).map(sanitizeJob).filter(Boolean);
     // Additive de-dup: never re-add a URL already in the pipeline.
     const known = existingPipelineUrls();
@@ -168,7 +180,7 @@ async function cmdRun(args) {
 
   if (hook === 'export') {
     const snapshot = buildSnapshot();
-    const results = await runHook('export', snapshot, { root: ROOT, dryRun });
+    const results = await runHook('export', snapshot, { root: ROOT, dryRun, timeoutMs });
     for (const r of results) {
       if (r.ok) console.log(`${r.id} export: pushed ${r.result?.pushed ?? 0} record(s).`);
       else console.log(`${r.id} export: failed — ${r.error}`);
@@ -178,7 +190,7 @@ async function cmdRun(args) {
 
   if (hook === 'notify') {
     const message = positional.slice(hookArgStart).join(' ') || '(career-ops notification)';
-    const results = await runHook('notify', { message }, { root: ROOT, dryRun });
+    const results = await runHook('notify', { message }, { root: ROOT, dryRun, timeoutMs });
     for (const r of results) console.log(r.ok ? `${r.id} notify: sent.` : `${r.id} notify: failed — ${r.error}`);
     return;
   }
