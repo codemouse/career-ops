@@ -22,7 +22,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import {
   extractUrls, canonicalJobUrl, isAuthenticEmail, parseRoleAtCompany,
   getMessageBody, companyFromUrl, senderDomain, companyFromSender, sourceFromSender,
-  isKnownBoardName,
+  isKnownBoardName, titleFromUrl,
 } from './_helpers.mjs';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -166,7 +166,7 @@ export default {
         // win over a genuinely empty company field.
         const seedCompany = seed && !isKnownBoardName(seed.company) ? seed.company : '';
         jobs.push({
-          title: seed?.role || 'Job lead (email)',
+          title: seed?.role || titleFromUrl(url) || 'Job lead (email)',
           url,
           company: companyFromUrl(url) || seedCompany || companyFromSender(fromDomain) || '',
           location: '',
@@ -176,7 +176,12 @@ export default {
       processedIds.add(m.id);
     }
 
-    saveProcessedIds(processedIds);
+    // --dry-run must stay a true no-op: advancing the cursor here would
+    // permanently mark these messages seen without ever writing their leads
+    // to the pipeline, indistinguishable from silently losing them (#gmail
+    // dry-run cursor leak — every job this run found becomes unrecoverable
+    // on the next real run, since it starts from an already-advanced state).
+    if (!ctx.dryRun) saveProcessedIds(processedIds);
     return jobs;
   },
 };

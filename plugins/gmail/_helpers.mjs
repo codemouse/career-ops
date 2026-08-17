@@ -371,6 +371,35 @@ export function getMessageBody(payload) {
 }
 
 /**
+ * Best-effort job title from the posting URL itself — used when the email
+ * subject doesn't parse (common in multi-link digest emails, where one
+ * subject fronts many distinct postings). Without this, every unparsed
+ * lead in a message shares the same literal fallback title, and the
+ * pipeline's company::role::source dedupe key collapses them into "the
+ * same" pending row, silently dropping the rest.
+ * @param {string} url
+ * @returns {string}
+ */
+export function titleFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split('/').filter(Boolean);
+    const last = segments[segments.length - 1] || '';
+    const readable = last.replace(/[-_]+/g, ' ').trim();
+    // A slug is "readable" if it has real words and isn't just a hex/numeric id.
+    if (readable && /[a-z]{3,}/i.test(readable) && !/^[0-9a-f]{16,}$/i.test(last)) {
+      return readable.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+    // No usable slug (e.g. LinkedIn/Adzuna/Glassdoor numeric-id URLs) — fall
+    // back to a short unique fragment so distinct leads never collide.
+    const idLike = last || u.searchParams.get('jobListingId') || segments[segments.length - 2] || '';
+    return idLike ? `Job lead #${idLike.slice(-10)}` : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Best-effort company name from a known ATS URL (greenhouse/lever slug).
  * @param {string} url
  * @returns {string}
@@ -380,10 +409,7 @@ export function companyFromUrl(url) {
     const { hostname, pathname } = new URL(url);
     if (hostname.endsWith('linkedin.com')) return '';
 
-    if (hostname.endsWith('glassdoor.com')) {
-      if (/^\/partner\/jobListing\.htm$/i.test(pathname)) return 'Glassdoor';
-      return '';
-    }
+    if (hostname.endsWith('glassdoor.com')) return '';
 
     if (hostname === 'boards.greenhouse.io' || hostname.endsWith('.greenhouse.io') ||
         hostname === 'jobs.lever.co' || hostname.endsWith('.lever.co')) {
