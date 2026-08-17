@@ -6,7 +6,8 @@ import { resolve, dirname, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import yaml from 'js-yaml';
-import { cell } from '../tracker-utils.mjs';
+import { cell, resolvePdfIndexPath } from '../tracker-utils.mjs';
+import { parsePdfIndex } from '../find.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -54,24 +55,31 @@ function handleApi(req, res, path) {
     return json(res, 200, readTracker());
   }
 
-  if ((req.method === 'GET' || req.method === 'HEAD') && path === '/download/recruiter-resume') {
-    return serveLatestResume(res, 'recruiter');
-  }
-
-  if ((req.method === 'GET' || req.method === 'HEAD') && path === '/download/full-resume') {
-    return serveLatestResume(res, 'full');
-  }
-
   if (req.method === 'POST' && path === '/api/scan') {
-    const out = runNode(['scan.mjs']);
-    return json(res, out.status === 0 ? 200 : 500, out);
+    const scanOut = runNode(['scan.mjs']);
+    // Generous timeout: the engine's default 15s doesn't actually cancel the
+    // Gmail fetch on expiry — it keeps running in the background and later
+    // overwrites the processed-message cursor without saving what it found,
+    // silently hiding leads. A large label + full history makes 15s too easy to miss.
+    const gmailOut = runNode(['plugins.mjs', 'run', 'gmail', '--timeout-ms', '60000']);
+    const stdout = [scanOut.stdout, gmailOut.stdout && `\n— Gmail ingest —\n${gmailOut.stdout}`]
+      .filter(Boolean).join('\n');
+    // Gmail is opt-in (config/plugins.yml); a disabled/misconfigured plugin
+    // logs to stderr and exits non-zero without failing the portal scan.
+    const stderr = [scanOut.stderr, gmailOut.status !== 0 && gmailOut.stderr && `Gmail ingest: ${gmailOut.stderr}`]
+      .filter(Boolean).join('\n');
+    return json(res, scanOut.status === 0 ? 200 : 500, { status: scanOut.status, stdout, stderr });
   }
 
   if (req.method === 'POST' && path === '/api/status') {
-    return readBody(req, res, ({ selector, state, note }) => {
+    return readBody(req, res, ({ selector, state, note, setNote }) => {
       if (!selector || !state) return json(res, 400, { error: 'selector and state are required' });
+      if (note != null && setNote != null) return json(res, 400, { error: 'note and setNote are mutually exclusive' });
       const args = ['set-status.mjs', String(selector), String(state)];
-      if (note && String(note).trim()) args.push('--note', String(note).trim());
+      // setNote replaces the Notes cell verbatim (freeform row edit); note
+      // appends with the existing "; "-separated, idempotent semantics.
+      if (setNote != null) args.push('--set-note', String(setNote));
+      else if (note && String(note).trim()) args.push('--note', String(note).trim());
       const out = runNode(args);
       return json(res, out.status === 0 ? 200 : 500, out);
     });
@@ -132,6 +140,12 @@ function handleApi(req, res, path) {
     return json(res, 200, { reports: listReports() });
   }
 
+  if (req.method === 'GET' && path === '/api/reports/by-url') {
+    const reportUrl = String(new URL(req.url || '/', `http://${req.headers.host}`).searchParams.get('url') || '').trim();
+    if (!reportUrl) return json(res, 400, { error: 'url is required' });
+    return json(res, 200, { filename: reportFilenameFromUrl(reportUrl), score: scoreFromReportUrl(reportUrl) });
+  }
+
   if (req.method === 'GET' && path.startsWith('/api/reports/')) {
     const slug = decodeURIComponent(path.slice('/api/reports/'.length));
     if (!slug || slug.includes('..') || slug.includes('/')) return json(res, 400, { error: 'invalid slug' });
@@ -140,10 +154,21 @@ function handleApi(req, res, path) {
     return json(res, 200, { content: readFileSync(file, 'utf8') });
   }
 
+  if (req.method === 'POST' && path === '/api/reports/pdf-on-demand') {
+    return readBody(req, res, async ({ company }) => {
+      const targetCompany = String(company || '').trim();
+      if (!targetCompany) return json(res, 400, { error: 'company is required' });
+      const result = await runCareerOpsPdfOnDemand(targetCompany);
+      return json(res, result.status === 0 ? 200 : 500, result);
+    });
+  }
+
   if (req.method === 'POST' && path === '/api/evaluate') {
     return readBody(req, res, ({ url }) => {
       if (!url || typeof url !== 'string') return json(res, 400, { error: 'url is required' });
-      streamEvaluate(req, res, url.trim());
+      const trimmedUrl = normalizeLinkedInJobUrl(url.trim());
+      ensureInPipeline(trimmedUrl);
+      streamEvaluate(req, res, trimmedUrl);
     });
   }
 
@@ -180,60 +205,37 @@ function handleDownload(req, res, path) {
     return text(res, 405, 'Method Not Allowed');
   }
 
-  if (path === '/download/recruiter-resume') {
-    return serveLatestResume(res, 'recruiter');
-  }
-
-  if (path === '/download/full-resume') {
-    return serveLatestResume(res, 'full');
+  if (path.startsWith('/download/resume/')) {
+    const filename = decodeURIComponent(path.slice('/download/resume/'.length));
+    return serveResumePdf(req, res, filename);
   }
 
   return text(res, 404, 'Not Found');
 }
 
-function serveLatestResume(res, kind) {
-  const file = findLatestResumePdf(kind);
-  if (!file) return text(res, 404, `No ${kind} resume PDF found.`);
+// Serves any PDF in output/ by exact filename — the dropdown built from
+// /api/resumes (listResumePdfs) is the only source of these filenames, but
+// the route still guards against path traversal since it's a public GET.
+function serveResumePdf(req, res, filename) {
+  if (!filename || filename.includes('..') || filename.includes('/') || !filename.toLowerCase().endsWith('.pdf')) {
+    return text(res, 400, 'Invalid filename');
+  }
+  const outputDir = resolve(root, 'output');
+  const file = resolve(outputDir, filename);
+  if (!file.startsWith(outputDir + '/') || !existsSync(file)) {
+    return text(res, 404, 'Not found');
+  }
 
   const body = readFileSync(file);
   res.writeHead(200, {
     'Content-Type': 'application/pdf',
-    'Content-Disposition': `inline; filename="${file.split('/').pop()}"`,
+    'Content-Disposition': `inline; filename="${filename}"`,
     'Content-Length': body.length,
   });
-  if (res.req?.method === 'HEAD') {
+  if (req.method === 'HEAD') {
     return res.end();
   }
   res.end(body);
-}
-
-function findLatestResumePdf(kind) {
-  const outputDir = resolve(root, 'output');
-  if (!existsSync(outputDir)) return '';
-
-  const patterns = kind === 'recruiter'
-    ? [/^brian-recruiter.*\.pdf$/i]
-    : [/^brian-full.*\.pdf$/i, /^brian-current-resume.*\.pdf$/i];
-
-  const candidates = readdirSync(outputDir)
-    .filter((name) => patterns.some((pattern) => pattern.test(name)))
-    .map((name) => {
-      const file = resolve(outputDir, name);
-      const stat = safeStat(file);
-      return stat ? { file, mtimeMs: stat.mtimeMs } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-
-  return candidates[0]?.file || '';
-}
-
-function safeStat(file) {
-  try {
-    return statSync(file);
-  } catch {
-    return null;
-  }
 }
 
 function readScanHistoryAddedAtByUrl() {
@@ -276,6 +278,33 @@ function addToPipeline(url, company, role, location) {
   const updated = content.slice(0, insertAt) + '\n' + entry + '\n' + content.slice(insertAt);
   writeFileSync(file, updated, 'utf8');
   return { ok: true, entry };
+}
+
+// True if `url` already appears anywhere in pipeline.md (Pending or Processed),
+// matched loosely via normalizeUrlForMatch so tracking params don't cause misses.
+function pipelineHasUrl(url) {
+  const file = resolve(root, 'data', 'pipeline.md');
+  if (!existsSync(file)) return false;
+  const target = normalizeUrlForMatch(url);
+  const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('- [')) continue;
+    const item = parsePipelineItem(trimmed);
+    if (normalizeUrlForMatch(item.url) === target || normalizeUrlForMatch(item.originalUrl) === target) return true;
+  }
+  return false;
+}
+
+// Quick Evaluate lets the user paste any URL, not just ones the scanner already
+// queued. Without an inbox entry, a dead link makes oferta.md's liveness gate
+// stop with "not in pipeline.md, no inbox entry to mark" instead of resolving
+// cleanly — so give it one before evaluation starts. Best-effort: evaluation
+// proceeds either way.
+function ensureInPipeline(url) {
+  try {
+    if (!pipelineHasUrl(url)) addToPipeline(url, '', 'Quick Evaluate', '');
+  } catch { /* ignore */ }
 }
 
 function readPipeline() {
@@ -537,7 +566,7 @@ function parsePipelineItem(line) {
   const clean = line.replace(/^- \[[^\]]+\]\s*/, '');
   const parts = clean.split('|').map((p) => p.trim());
   const originalUrl = parts[0] || '';
-  const url = unwrapTrackingUrl(originalUrl) || originalUrl;
+  const url = normalizeLinkedInJobUrl(unwrapTrackingUrl(originalUrl) || originalUrl);
   const initialCompany = parts[1] || '';
   const initialRole = parts[2] || '';
   const host = hostFromUrl(url);
@@ -549,7 +578,7 @@ function parsePipelineItem(line) {
   // better, check whether this exact posting was already evaluated: reports/
   // carry the real employer the evaluator extracted from the JD itself.
   const resolvedCompany = shouldUseDerivedCompany(initialCompany, host)
-    ? (derivedCompany || companyFromReportUrl(url) || '')
+    ? (derivedCompany || companyFromReportUrl(url) || stripCompanySalarySuffix(initialCompany))
     : initialCompany;
   const resolvedRole = shouldUseDerivedRole(initialRole) && derivedRole ? derivedRole : initialRole;
 
@@ -567,6 +596,8 @@ function parsePipelineItem(line) {
   parsed.source = normalizePipelineSource(sourceFromNote(parsed.note) || sourceFromUrl(parsed.url), parsed);
   parsed.sourceHost = hostFromUrl(parsed.url);
   parsed.employmentType = inferEmploymentType(parsed);
+  parsed.score = scoreFromReportUrl(url);
+  parsed.reportFilename = reportFilenameFromUrl(url);
   return parsed;
 }
 
@@ -588,13 +619,38 @@ function unwrapTrackingUrl(inputUrl, depth = 0) {
   }
 }
 
+// LinkedIn's "comm" job links (the format used in email/mobile-share alerts)
+// 302 straight to a bare login wall with zero JD content. The canonical
+// /jobs/view/{id}/ path for the same posting serves the JD text behind a
+// login overlay instead, so it's the one Open links, Evaluate, and the
+// liveness/JD-fetch gate can actually use. Without this, Evaluate silently
+// spins forever on these rows (the JD fetch has nothing to work with, so it
+// never produces the assistant text the UI streams).
+function normalizeLinkedInJobUrl(url) {
+  const m = String(url || '').match(/^(https?:\/\/(?:www\.)?linkedin\.com)\/comm\/jobs\/view\/(\d+)/i);
+  return m ? `${m[1]}/jobs/view/${m[2]}/` : url;
+}
+
+// LinkedIn appends a compensation-insight suffix to the poster label, e.g.
+// "Ladders: up to $502K/year" or "talisman: up to $350K/year" -- the leading
+// name is the job board/recruiter/aggregator that posted it, not reliably the
+// real employer, so treat it the same as the generic board names below.
+const SALARY_SUFFIX_RE = /:\s*(up to\s*)?\$[\d,.]+\s*k?\s*(\/|per\s*)?(year|yr)\b/i;
+
 function shouldUseDerivedCompany(company, host) {
   const c = String(company || '').trim().toLowerCase();
   if (!c) return true;
   if (host === 'fractionaljobs.io' || host === 'www.fractionaljobs.io') {
     return c === 'fractionaljobs' || c === 'fractional jobs';
   }
+  if (SALARY_SUFFIX_RE.test(c)) return true;
   return c === 'builtin' || c === 'linkedin' || c === 'adzuna' || c === 'glassdoor';
+}
+
+function stripCompanySalarySuffix(company) {
+  const c = String(company || '');
+  const m = c.match(SALARY_SUFFIX_RE);
+  return (m ? c.slice(0, m.index) : c).trim();
 }
 
 function shouldUseDerivedRole(role) {
@@ -836,11 +892,31 @@ function looksLikeFullTimeByHost(host, path) {
   return false;
 }
 
+// Latest date per tracker row from the append-only transition ledger
+// (data/status-log.tsv, written by set-status.mjs — never edited in place).
+// Rows with no logged transition yet (e.g. never had a status change) fall
+// back to the tracker's own date column in readTracker().
+function readLastUpdatedByNum(trackerFile) {
+  const logPath = resolve(dirname(trackerFile), 'status-log.tsv');
+  if (!existsSync(logPath)) return {};
+
+  const lastByNum = {};
+  const lines = readFileSync(logPath, 'utf8').split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const [num, date] = line.split('\t');
+    if (!num || !date) continue;
+    if (!lastByNum[num] || date > lastByNum[num]) lastByNum[num] = date;
+  }
+  return lastByNum;
+}
+
 function readTracker() {
   const pathCandidates = [resolve(root, 'data', 'applications.md'), resolve(root, 'applications.md')];
   const file = pathCandidates.find((p) => existsSync(p));
   if (!file) return { found: false, rows: [], summary: {} };
 
+  const lastUpdatedByNum = readLastUpdatedByNum(file);
   const lines = readFileSync(file, 'utf8').split(/\r?\n/);
   const rows = [];
   for (const line of lines) {
@@ -862,6 +938,7 @@ function readTracker() {
       pdf: cols[6],
       report: cols[7],
       notes: cols[8],
+      lastUpdated: lastUpdatedByNum[cols[0]] || cols[1],
     });
   }
 
@@ -1149,6 +1226,50 @@ function runNode(args) {
   };
 }
 
+// Runs the headless PDF pipeline via async spawn (not spawnSync): this call
+// can take minutes (LLM + Playwright), and spawnSync would block Node's
+// single-threaded event loop for the whole server, freezing every other
+// endpoint (including /api/reports) until it exits.
+function runCareerOpsPdfOnDemand(company) {
+  const claudePath = resolve(process.env.HOME || '', '.local', 'bin', 'claude');
+  const claude = existsSync(claudePath) ? claudePath : 'claude';
+  const command = `Run /career-ops pdf ${company}`;
+
+  return new Promise((resolvePromise) => {
+    const child = spawn(
+      claude,
+      [
+        '-p', command,
+        '--output-format', 'text',
+        '--permission-mode', 'acceptEdits',
+        '--allowedTools', 'Read,Write,Edit,Bash,Glob,Grep',
+        '--disallowedTools', 'Task,NotebookEdit',
+      ],
+      {
+        cwd: root,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (err) => {
+      resolvePromise({ status: 1, stdout: stdout.trim(), stderr: String(err?.message || err), command });
+    });
+    child.on('close', (code) => {
+      resolvePromise({
+        status: Number.isInteger(code) ? code : 1,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        command,
+      });
+    });
+  });
+}
+
 function readOpsBaseline() {
   const doctorRaw = runNode(['doctor.mjs', '--json']);
   const updateRaw = runNode(['update-system.mjs', 'check']);
@@ -1227,12 +1348,31 @@ function listResumePdfs() {
   const dir = resolve(root, 'output');
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter((f) => f.endsWith('.pdf'))
+    // generate-cover-letter.mjs always suffixes cover-letter PDFs "-cover.pdf"
+    // (cover.md's own output_path convention) — excluded so this list, used
+    // both by the dashboard's resume dropdown and the "Mark Applied" resume
+    // picker, only ever offers actual resumes.
+    .filter((f) => f.endsWith('.pdf') && !f.toLowerCase().endsWith('-cover.pdf'))
     .sort((a, b) => {
       // newest first by mtime
       try { return statSync(resolve(dir, b)).mtimeMs - statSync(resolve(dir, a)).mtimeMs; } catch { return 0; }
     })
-    .map((f) => ({ filename: f, label: f.replace('.pdf', '') }));
+    .map((f) => {
+      const stat = safeStat(resolve(dir, f));
+      return {
+        filename: f,
+        label: f.replace(/\.pdf$/i, ''),
+        mtime: stat ? new Date(stat.mtimeMs).toISOString() : null,
+      };
+    });
+}
+
+function safeStat(file) {
+  try {
+    return statSync(file);
+  } catch {
+    return null;
+  }
 }
 
 function bulkImportFromWorkbook(filePath) {
@@ -1330,8 +1470,8 @@ function normalizeUrlForMatch(url) {
   }
 }
 
-// Maps posting URL -> employer name already extracted (from the JD itself,
-// not the board) by a past evaluation. Rebuilt only when reports/ changes.
+// Maps posting URL -> report metadata extracted by a past evaluation.
+// Rebuilt only when reports/ changes.
 function reportUrlIndex() {
   const dir = resolve(root, 'reports');
   if (!existsSync(dir)) return new Map();
@@ -1345,10 +1485,12 @@ function reportUrlIndex() {
       const lines = readFileSync(resolve(dir, filename), 'utf8').split('\n').slice(0, 15);
       const urlLine = lines.find((l) => l.startsWith('**URL:**'));
       const companyLine = lines.find((l) => l.startsWith('# Evaluation:'));
+      const scoreLine = lines.find((l) => l.startsWith('**Score:**'));
       if (!urlLine || !companyLine) continue;
       const reportUrl = urlLine.replace('**URL:**', '').trim();
       const company = (companyLine.replace('# Evaluation:', '').trim().split('—')[0] || '').trim();
-      if (reportUrl && company) index.set(normalizeUrlForMatch(reportUrl), company);
+      const score = scoreLine ? scoreLine.replace('**Score:**', '').trim() : '';
+      if (reportUrl && company) index.set(normalizeUrlForMatch(reportUrl), { company, filename, score });
     } catch { /* skip unreadable report */ }
   }
   reportUrlIndexCache = index;
@@ -1357,12 +1499,35 @@ function reportUrlIndex() {
 }
 
 function companyFromReportUrl(url) {
-  return reportUrlIndex().get(normalizeUrlForMatch(url)) || '';
+  return reportUrlIndex().get(normalizeUrlForMatch(url))?.company || '';
+}
+
+function reportFilenameFromUrl(url) {
+  return reportUrlIndex().get(normalizeUrlForMatch(url))?.filename || '';
+}
+
+function scoreFromReportUrl(url) {
+  return reportUrlIndex().get(normalizeUrlForMatch(url))?.score || '';
+}
+
+// "008" and "8" both refer to the same report — same normalization find.mjs
+// uses to match the tracker's Report-link number against the manifest.
+const normReportNum = (s) => String(s ?? '').trim().replace(/^0+(?=\d)/, '');
+
+function readPdfIndexMap() {
+  const manifestPath = resolvePdfIndexPath(resolve(root, 'data', 'applications.md'));
+  if (!existsSync(manifestPath)) return new Map();
+  try {
+    return parsePdfIndex(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return new Map();
+  }
 }
 
 function listReports() {
   const dir = resolve(root, 'reports');
   if (!existsSync(dir)) return [];
+  const pdfIndex = readPdfIndexMap();
   return readdirSync(dir)
     .filter((f) => f.endsWith('.md'))
     .sort((a, b) => b.localeCompare(a))
@@ -1388,7 +1553,9 @@ function listReports() {
           role = (parts[1] || '').trim();
         }
       } catch { /* ignore */ }
-      return { filename, num, slug, date, score, company, role };
+      const pdfPath = num ? pdfIndex.get(normReportNum(num)) || '' : '';
+      const pdfFilename = pdfPath ? basename(pdfPath) : '';
+      return { filename, num, slug, date, score, company, role, pdfFilename };
     });
 }
 
@@ -1399,7 +1566,11 @@ function buildEvalPrompt(url, today) {
   const mem = memory.trim() ? `\n\nDurable notes about the user (from their profile):\n${memory.trim()}\n` : '';
   return `You are running the OFFICIAL career-ops job evaluation, HEADLESS, on the user's own machine. Today is ${today}. Run the REAL career-ops evaluation — do NOT improvise your own scoring.
 
-1. Read modes/oferta.md and follow it EXACTLY (blocks A–F, G posting-legitimacy, and the Machine Summary). Ground the fit in THIS person: read cv.md, config/profile.yml and modes/_profile.md. Use WebFetch to read the posting (you are headless — Playwright is unavailable, so use WebFetch and mark the report header "Verification: unconfirmed (batch mode)").
+1. Read modes/oferta.md and follow it EXACTLY (blocks A–F, G posting-legitimacy, the Machine Summary, and its "Record in tracker" section — including its Step 3, which checks modes/_custom.md for a PDF auto-generation score threshold and runs the PDF pipeline immediately when the final score meets it). Ground the fit in THIS person: read cv.md, config/profile.yml and modes/_profile.md.
+
+   Liveness + JD fetch: you have no browser MCP tools here, so use career-ops' own headless-Playwright helper instead of browser_navigate/browser_snapshot — run \`node browser-extract.mjs "<posting URL>" --mode jd\` via Bash. It launches a real headless browser and returns compact JSON \`{ url, title, text }\`. Use \`text\` to run the Liveness gate (a real job description or apply path = active; only nav/footer text, an expired/closed message, or a 404 = closed — stop before Block A per modes/oferta.md) and as the JD source for Blocks A-F and Block G's freshness signal. This counts as Playwright-verified — do NOT add a "Verification: unconfirmed" header marker.
+
+   Fallback only: if the command errors (exit 1, e.g. bot-walled) or is missing, use WebFetch instead and mark the report header "Verification: unconfirmed (batch mode)".
 
 2. Persist the result CANONICALLY so the web and the CLI share ONE source of truth:
    a. Reserve a report number: run \`node reserve-report-num.mjs\` — its stdout is a 3-digit number (e.g. 035).

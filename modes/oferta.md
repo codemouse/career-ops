@@ -588,6 +588,12 @@ Save full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md`.
 - PDF: ❌ (or ✅ if auto-pipeline generated PDF)
 - Report: root-relative link `[001](reports/001-company-2026-01-01.md)` (when merged via `merge-tracker.mjs` it is normalized to be relative to the tracker's own dir, e.g. `../reports/...`; see #760)
 
+### 3. Auto-generate PDF at a score threshold
+
+Read `modes/_custom.md` → House Rules for a PDF auto-generation threshold. If one is defined and the final score meets or exceeds it, run the full PDF pipeline now — `modes/pdf.md`, or `modes/latex.md` if `config/profile.yml` sets `cv.output_format: latex` — before moving on. Update the report header's `**PDF:**` field and the tracker's PDF column to ✅ once it succeeds.
+
+Default (no such rule in `modes/_custom.md`, or this mode is running as part of `auto-pipeline`'s Step 1, which already generates a PDF unconditionally in its own Step 3): skip this step — PDF generation stays manual as today.
+
 **Tracker format:**
 
 ```markdown

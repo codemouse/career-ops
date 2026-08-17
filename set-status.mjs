@@ -8,7 +8,7 @@
  * modes (apply Step 9, followup, batch) call this instead of editing the table.
  *
  * Usage:
- *   node set-status.mjs <report#|company> <state> [--note "..."] [--role "..."] [--force] [--dry-run] [--json]
+ *   node set-status.mjs <report#|company> <state> [--note "..."] [--set-note "..."] [--role "..."] [--force] [--dry-run] [--json]
  *
  * Row resolution:
  *   - --row N     → exact match on the # column, stated explicitly
@@ -42,7 +42,11 @@
  * State validation is strict against templates/states.yml (labels, ids, and
  * aliases resolve to the canonical label; anything else is rejected before the
  * tracker is touched). --note appends to the Notes cell with "; " and is
- * idempotent — re-running the same command is always safe.
+ * idempotent — re-running the same command is always safe. --set-note instead
+ * overwrites the Notes cell verbatim (freeform edit, not an append) — the two
+ * are mutually exclusive. Both accept the current status as <state> to edit
+ * notes without a real transition (statusChanged stays false; noteChanged
+ * still drives the write).
  *
  * The read-modify-write runs under the shared tracker lock (tracker-utils.mjs,
  * same lock as merge-tracker.mjs) and the file is replaced atomically. Only the
@@ -84,7 +88,7 @@ const STATES_FILE = join(CAREER_OPS, 'templates/states.yml');
 // acquireTrackerLockForCli() itself (tracker-utils.mjs), via CLI_EXIT.LOCK_TIMEOUT.
 const { OK: EXIT_OK, USAGE: EXIT_USAGE, NOT_FOUND: EXIT_NOT_FOUND, AMBIGUOUS: EXIT_AMBIGUOUS } = CLI_EXIT;
 
-const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "..."] [--role "..."] [--on YYYY-MM-DD] [--force] [--dry-run] [--json]
+const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "..."] [--set-note "..."] [--role "..."] [--on YYYY-MM-DD] [--force] [--dry-run] [--json]
        node set-status.mjs --row N <state> [...]        (explicit tracker row ID)
        node set-status.mjs --report N <state> [...]     (explicit report ID)
 
@@ -93,6 +97,7 @@ const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "...
   --row N            Select by tracker # explicitly (unambiguous; skips the mismatch guard)
   --report N         Select the row whose Report cell links report #N
   --note "..."       Append to the Notes cell ("; "-separated, idempotent)
+  --set-note "..."   Replace the Notes cell verbatim (freeform edit; mutually exclusive with --note)
   --role "..."       Disambiguate when several rows share the company (fuzzy match)
   --on YYYY-MM-DD    Real event date for the status-log entry (defaults to today —
                      pass it when the transition happened earlier than it's recorded)
@@ -139,8 +144,8 @@ function milestoneNote(logPath, newStatus) {
 
 const rawArgs = process.argv.slice(2);
 const positional = [];
-const flags = { note: null, role: null, on: null, row: null, report: null, force: false, dryRun: false, json: false };
-const VALUE_FLAGS = { '--note': 'note', '--role': 'role', '--on': 'on', '--row': 'row', '--report': 'report' };
+const flags = { note: null, setNote: null, role: null, on: null, row: null, report: null, force: false, dryRun: false, json: false };
+const VALUE_FLAGS = { '--note': 'note', '--set-note': 'setNote', '--role': 'role', '--on': 'on', '--row': 'row', '--report': 'report' };
 
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
@@ -171,6 +176,9 @@ for (let i = 0; i < rawArgs.length; i++) {
 // rather than pick, since picking wrong writes to the wrong application.
 if (flags.row !== null && flags.report !== null) {
   failUsage('--row and --report are mutually exclusive — they name different number spaces');
+}
+if (flags.note !== null && flags.setNote !== null) {
+  failUsage('--note and --set-note are mutually exclusive — one appends, the other replaces');
 }
 const explicitSelector = flags.row !== null || flags.report !== null;
 
@@ -461,9 +469,10 @@ if (flags.role && !flags.force && !roleMatchesTarget) {
 }
 const oldStatus = target.status;
 const note = flags.note != null ? cell(flags.note) : null;
+const setNote = flags.setNote != null ? cell(flags.setNote) : null;
 
-// Rebuild only the matched line: change the Status cell, append the note, keep
-// every other cell exactly as parsed.
+// Rebuild only the matched line: change the Status cell, append/replace the
+// note, keep every other cell exactly as parsed.
 const parts = lines[target.lineIdx].split('|').map(s => s.trim());
 while (parts.length <= Math.max(colmap.status, colmap.notes ?? 0)) parts.push('');
 
@@ -471,7 +480,16 @@ const statusChanged = parts[colmap.status] !== newStatus;
 parts[colmap.status] = newStatus;
 
 let noteChanged = false;
-if (note) {
+if (setNote != null) {
+  if (colmap.notes == null) {
+    failWith(EXIT_USAGE, 'no-notes-column', 'Tracker has no Notes column — cannot apply --set-note');
+  }
+  const existing = parts[colmap.notes] ?? '';
+  if (existing !== setNote) {
+    parts[colmap.notes] = setNote;
+    noteChanged = true;
+  }
+} else if (note) {
   if (colmap.notes == null) {
     failWith(EXIT_USAGE, 'no-notes-column', 'Tracker has no Notes column — cannot apply --note');
   }
@@ -536,7 +554,7 @@ const result = {
   role: target.role,
   oldStatus,
   newStatus,
-  ...(note != null ? { note } : {}),
+  ...(setNote != null ? { note: setNote, noteMode: 'replace' } : note != null ? { note, noteMode: 'append' } : {}),
   ...(flags.dryRun ? { dryRun: true } : {}),
   // Fire the #1430 hook only on an actual transition INTO Applied — an
   // idempotent re-run of an already-Applied row must not invite a consumer
@@ -550,7 +568,8 @@ if (flags.json) {
   console.log(JSON.stringify(result, null, 2));
 } else {
   const verb = flags.dryRun ? 'would set' : changed ? 'set' : 'already';
-  console.log(`✅ #${target.num} ${target.company} — ${target.role}: ${verb} ${oldStatus} → ${newStatus}${note ? ` (note: ${note})` : ''}`);
+  const noteSuffix = setNote != null ? ` (note set: ${setNote})` : note ? ` (note: ${note})` : '';
+  console.log(`✅ #${target.num} ${target.company} — ${target.role}: ${verb} ${oldStatus} → ${newStatus}${noteSuffix}`);
   if (statusChanged && !flags.dryRun && newStatus === 'Applied') {
     console.error('ℹ️  Status is Applied — consider seeding follow-ups in data/follow-ups.md (#1430: node followup-cadence.mjs)');
   }
