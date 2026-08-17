@@ -5814,7 +5814,7 @@ try {
   const historyRow = formatScanHistoryRow(hostileOffer, '2026-06-18');
   const historyColumns = historyRow.split('\t');
   if (
-    historyColumns.length === 12 && // 7 metadata + fingerprint (#1597) + postedAt + trust score/flags (#1743) + normalized_company (#2093)
+    historyColumns.length === 13 && // 7 metadata + fingerprint (#1597) + postedAt + trust score/flags (#1743) + normalized_company (#2093) + addedAt
     historyColumns[8] === '' && // no postedAt on hostileOffer → empty trailing col
     historyColumns[9] === '' && historyColumns[10] === '' && // no trust signal → empty trailing cols
     !historyColumns.some(col => /[\r\n\t]/.test(col)) &&
@@ -5845,10 +5845,10 @@ try {
   const datedHistory = formatScanHistoryRow(datedOffer, '2026-07-09').split('\t');
   const noDateHistory = formatScanHistoryRow({ ...datedOffer, postedAt: undefined }, '2026-07-09').split('\t');
   if (
-    datedHistory.length === 12 &&
+    datedHistory.length === 13 &&
     datedHistory[8] === '2026-06-18' && // epoch ms → YYYY-MM-DD in the trailing column
     datedHistory[11] === 'acme' && // normalized company key (#2093), trailing col 12
-    noDateHistory.length === 12 &&
+    noDateHistory.length === 13 &&
     noDateHistory[8] === '' && // missing postedAt → empty trailing column, never a bogus date
     noDateHistory[11] === 'acme'
   ) {
@@ -5884,10 +5884,10 @@ try {
   const flaggedHist = formatScanHistoryRow(flaggedOffer, '2026-07-09').split('\t');
   const cleanHist = formatScanHistoryRow(cleanOffer, '2026-07-09').split('\t');
   if (
-    flaggedHist.length === 12 &&
+    flaggedHist.length === 13 &&
     flaggedHist[9] === '60' && flaggedHist[10] === 'missing_apply_url,suspicious_domain' &&
     flaggedHist[11] === 'acme' && // normalized company key (#2093), after the trust cols
-    cleanHist.length === 12 && cleanHist[9] === '' && cleanHist[10] === '' // score 100 → not flagged → empty
+    cleanHist.length === 13 && cleanHist[9] === '' && cleanHist[10] === '' // score 100 → not flagged → empty
   ) {
     pass('scan-history writer appends trust score + flags trailing columns when flagged, empty otherwise (#1743)');
   } else {
@@ -12444,7 +12444,7 @@ try {
     '2026-07-06',
   );
   const cols = withBody.split('\t');
-  if (cols.length === 12 && /^[0-9a-f]{16}$/.test(cols[7]) && cols[11] === 'acme') {
+  if (cols.length === 13 && /^[0-9a-f]{16}$/.test(cols[7]) && cols[11] === 'acme') {
     pass('formatScanHistoryRow appends a fingerprint column for described offers');
   } else {
     fail(`formatScanHistoryRow columns: ${cols.length}, fingerprint=${JSON.stringify(cols[7])}`);
@@ -12454,7 +12454,7 @@ try {
     '2026-07-06',
   );
   const cols2 = withoutBody.split('\t');
-  if (cols2.length === 12 && cols2[7] === '' && cols2[11] === 'acme') {
+  if (cols2.length === 13 && cols2[7] === '' && cols2[11] === 'acme') {
     pass('formatScanHistoryRow leaves the fingerprint empty when no description is available');
   } else {
     fail(`formatScanHistoryRow (no body) columns: ${cols2.length}, last=${JSON.stringify(cols2[7])}`);
