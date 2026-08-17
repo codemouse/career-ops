@@ -1,9 +1,12 @@
+const THEME_STORAGE_KEY = 'careerops-theme';
 const trackerBody = document.querySelector('#trackerTable tbody');
 const trackerTable = document.getElementById('trackerTable');
 const trackerSummary = document.getElementById('trackerSummary');
+const trackerViewAllBtn = document.getElementById('trackerViewAllBtn');
+const trackerViewActiveBtn = document.getElementById('trackerViewActiveBtn');
 const pipelineSearchInput = document.getElementById('pipelineSearchInput');
 const pendingSummary = document.getElementById('pendingSummary');
-const fitFilterSummary = document.getElementById('fitFilterSummary');
+const hiddenJobsCount = document.getElementById('hiddenJobsCount');
 const pendingTable = document.getElementById('pendingTable');
 const pendingTableBody = document.querySelector('#pendingTable tbody');
 const opsChecklist = document.getElementById('opsChecklist');
@@ -17,6 +20,9 @@ const manageTabBtn = document.getElementById('manageTabBtn');
 const analyticsTabBtn = document.getElementById('analyticsTabBtn');
 const reportsTabBtn = document.getElementById('reportsTabBtn');
 const evaluateTabBtn = document.getElementById('evaluateTabBtn');
+const reportsGeneratePdfBtn = document.getElementById('reportsGeneratePdfBtn');
+const reportsDownloadResumeLink = document.getElementById('reportsDownloadResumeLink');
+const reportsToolbarMeta = document.getElementById('reportsToolbarMeta');
 const pipelinePanel = document.getElementById('pipelinePanel');
 const managePanel = document.getElementById('managePanel');
 const analyticsPanel = document.getElementById('analyticsPanel');
@@ -26,24 +32,21 @@ const refreshBtn = document.getElementById('refreshBtn');
 const scanBtn = document.getElementById('scanBtn');
 const dashboardTitle = document.getElementById('dashboardTitle');
 const brandTagline = document.getElementById('brandTagline');
-const themeButtons = Array.from(document.querySelectorAll('.theme-btn'));
-const whimsyMeter = document.getElementById('whimsyMeter');
-const whimsyMeterFill = document.getElementById('whimsyMeterFill');
-const whimsyMeterText = document.getElementById('whimsyMeterText');
-const goblinFortune = document.getElementById('goblinFortune');
 const toastRack = document.getElementById('toastRack');
-const mascot = document.querySelector('.mascot');
 const goblinHint = document.getElementById('goblinHint');
 const stateSelect = document.getElementById('stateSelect');
 const statusForm = document.getElementById('statusForm');
 const statusOutput = document.getElementById('statusOutput');
 const sourceFilterSelect = document.getElementById('sourceFilterSelect');
 const typeFilterSelect = document.getElementById('typeFilterSelect');
+const showHiddenToggle = document.getElementById('showHiddenToggle');
+const showPriorAppliedToggle = document.getElementById('showPriorAppliedToggle');
 const clearAllFiltersBtn = document.getElementById('clearAllFiltersBtn');
 const rejectModal = document.getElementById('rejectModal');
 const rejectForm = document.getElementById('rejectForm');
 const rejectReasonSelect = document.getElementById('rejectReasonSelect');
 const rejectReasonHelp = document.getElementById('rejectReasonHelp');
+const rejectPreview = document.getElementById('rejectPreview');
 const rejectCompanyChk = document.getElementById('rejectCompanyChk');
 const rejectSourceChk = document.getElementById('rejectSourceChk');
 const rejectTypeChk = document.getElementById('rejectTypeChk');
@@ -69,12 +72,28 @@ const pipelineState = {
   sortDir: 'desc',
   query: '',
   hintIndex: 0,
+  showHidden: false,
+  showPriorApplied: false,
 };
 
 const trackerState = {
   sortKey: 'date',
   sortDir: 'desc',
+  statusFilter: 'all', // 'all' | 'active' | an exact status string from the tracker (e.g. 'Rejected')
+  availableStates: [], // populated by loadStates(); canonical labels from templates/states.yml
 };
+
+// Manually re-running an evaluation to Evaluated is a real process (oferta/
+// auto-pipeline), not a one-click row edit — the inline status dropdown
+// offers every other canonical state but disables this one unless it's
+// already the row's current value (so the current status still displays
+// correctly for rows that haven't been touched yet).
+const INLINE_STATUS_LOCKED = new Set(['Evaluated']);
+
+// Applied/Responded/Interview/Offer — in-flight rows worth watching for a
+// reply. Evaluated (not yet applied) and terminal states (Hired/Rejected/
+// Discarded/SKIP) are excluded.
+const ACTIVE_STATUSES = new Set(['applied', 'responded', 'interview', 'offer']);
 
 const evaluateState = {
   jobs: [],
@@ -82,13 +101,17 @@ const evaluateState = {
   nextId: 1,
 };
 
+const reportsState = {
+  items: [],
+  selectedSlug: '',
+  pdfRunning: false,
+};
+
 const whimsyState = {
   titleClicks: [],
   hintTimer: null,
   taglineTimer: null,
   taglineIndex: 0,
-  activeTheme: 'calm',
-  lastMood: 'calm',
 };
 
 const taglinePool = [
@@ -105,6 +128,8 @@ const taglinePool = [
 ];
 
 const rejectReasons = [
+  { id: 'score-too-low', label: 'Score Too Low', help: 'Evaluated below your applying threshold — not a strong enough fit to pursue.' },
+  { id: 'not-right-fit', label: 'Not the right fit', help: 'General fit issue that does not match a more specific reason below.' },
   { id: 'skills-mismatch', label: 'Skills mismatch', help: 'The role requires experience that is not a good match.' },
   { id: 'seniority-mismatch', label: 'Seniority mismatch', help: 'The role level is too junior or too senior for your target.' },
   { id: 'company-stage', label: 'Company/stage mismatch', help: 'The company size, funding stage, or environment is not your fit.' },
@@ -136,6 +161,7 @@ baselineRefreshBtn?.addEventListener('click', loadOpsBaseline);
 runVerifyPipelineBtn?.addEventListener('click', () => runOpsAction('verify-pipeline'));
 runVerifyPortalsBtn?.addEventListener('click', () => runOpsAction('verify-portals'));
 runStatsBtn?.addEventListener('click', () => runOpsAction('stats-summary'));
+reportsGeneratePdfBtn?.addEventListener('click', generateSelectedReportPdf);
 pipelineSearchInput?.addEventListener('input', (ev) => {
   pipelineState.query = String(ev.target.value || '').trim().toLowerCase();
   renderPipeline();
@@ -148,15 +174,30 @@ typeFilterSelect?.addEventListener('change', (ev) => {
   pipelineFilters.type = String(ev.target.value || 'all');
   renderPipeline();
 });
+showHiddenToggle?.addEventListener('change', (ev) => {
+  pipelineState.showHidden = Boolean(ev.target.checked);
+  renderPipeline();
+});
+showPriorAppliedToggle?.addEventListener('change', (ev) => {
+  pipelineState.showPriorApplied = Boolean(ev.target.checked);
+  renderPipeline();
+});
 clearAllFiltersBtn?.addEventListener('click', () => {  pipelineFilters.source = 'all';
   pipelineFilters.type = 'all';
   pipelineState.query = '';
+  pipelineState.showPriorApplied = false;
   if (pipelineSearchInput) pipelineSearchInput.value = '';
+  if (showPriorAppliedToggle) showPriorAppliedToggle.checked = false;
   renderPipeline();
 });
 pendingTableBody?.addEventListener('click', (ev) => {
   const target = ev.target;
   if (!(target instanceof HTMLElement)) return;
+  const reportFilename = target.dataset.reportFilename || target.closest('[data-report-filename]')?.dataset.reportFilename;
+  if (reportFilename) {
+    openReportFromPipeline(reportFilename);
+    return;
+  }
   const jumpId = target.dataset.evalOpen || target.closest('[data-eval-open]')?.dataset.evalOpen;
   if (!jumpId) return;
   const job = evaluateState.jobs.find((entry) => entry.id === jumpId);
@@ -165,6 +206,15 @@ pendingTableBody?.addEventListener('click', (ev) => {
   setActiveTab('evaluate');
   renderEvaluationJobs();
   renderEvaluationViewer();
+});
+pendingTableBody?.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return;
+  const reportFilename = target.dataset.reportFilename || target.closest('[data-report-filename]')?.dataset.reportFilename;
+  if (!reportFilename) return;
+  ev.preventDefault();
+  openReportFromPipeline(reportFilename);
 });
 pendingTable?.querySelectorAll('button[data-sort-key]').forEach((btn) => {
   btn.addEventListener('click', () => togglePipelineSort(btn.dataset.sortKey || 'company'));
@@ -296,13 +346,20 @@ function showToast(message, type = 'success') {
 }
 
 async function loadAll() {
-  await Promise.all([loadStates(), loadTracker(), loadPipeline(), loadFitFilters(), loadOpsBaseline()]);
+  // fit-filter rules must be in place before pipeline renders, or exclusions
+  // won't apply on first paint (they'd only apply on a *second* load, since
+  // stale rules from a prior load happen to still be in memory by then).
+  await loadFitFilters();
+  // States load first: the tracker's inline per-row status dropdown needs
+  // trackerState.availableStates populated before rows render, or the first
+  // paint would offer only whatever status each row already has.
+  await loadStates();
+  await Promise.all([loadTracker(), loadPipeline(), loadOpsBaseline()]);
 }
 
 async function loadFitFilters() {
   const data = await api('/api/fit-filters');
   pipelineState.fitFilters = Array.isArray(data.rules) ? data.rules : [];
-  renderFitFilterSummary();
 }
 
 async function loadOpsBaseline() {
@@ -368,6 +425,7 @@ async function runOpsAction(action) {
 
 async function loadStates() {
   const data = await api('/api/states');
+  trackerState.availableStates = data.states || [];
   stateSelect.innerHTML = '';
   for (const s of data.states || []) {
     const option = document.createElement('option');
@@ -386,19 +444,29 @@ async function loadTracker() {
 
   if (!data.found) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="7">No tracker file found yet.</td>';
+    tr.innerHTML = '<td colspan="8">No tracker file found yet.</td>';
     trackerBody.appendChild(tr);
     return;
   }
 
   Object.entries(data.summary || {}).forEach(([k, v]) => {
-    const chip = document.createElement('span');
-    chip.className = 'chip';
-    chip.textContent = `${k}: ${v}`;
-    trackerSummary.appendChild(chip);
+    renderChip(trackerSummary, `${k}: ${v}`, {
+      clickable: true,
+      active: trackerState.statusFilter === k,
+      onClick: () => setTrackerFilter(trackerState.statusFilter === k ? 'all' : k),
+    });
   });
 
-  const sortedRows = sortTrackerRows(rows);
+  const viewRows = filterTrackerRows(rows, trackerState.statusFilter);
+
+  const sortedRows = sortTrackerRows(viewRows);
+  if (sortedRows.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="8">No matching applications.</td>';
+    trackerBody.appendChild(tr);
+    updateTrackerSortIndicators();
+    return;
+  }
   for (const row of sortedRows) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -407,14 +475,176 @@ async function loadTracker() {
       <td>${escapeHtml(row.company)}</td>
       <td>${escapeHtml(row.role)}</td>
       <td>${escapeHtml(row.score)}</td>
-      <td>${escapeHtml(row.status)}</td>
-      <td>${escapeHtml(row.notes || '')}</td>
+      <td class="tracker-status-cell"></td>
+      <td>${escapeHtml(row.lastUpdated || row.date)}</td>
+      <td class="tracker-notes-cell"></td>
     `;
+    tr.querySelector('.tracker-status-cell').appendChild(buildTrackerStatusControl(row));
+    tr.querySelector('.tracker-notes-cell').appendChild(buildTrackerNotesControl(row));
     trackerBody.appendChild(tr);
   }
 
   updateTrackerSortIndicators();
 }
+
+// Tracker # is blank ("—") on backfilled/legacy rows with no linked report,
+// so set-status.mjs can't select them by number — fall back to company name,
+// the same selector merge-tracker dedup already keys off.
+function trackerRowSelector(row) {
+  const num = String(row?.num ?? '').trim();
+  return /^\d+$/.test(num) ? num : String(row?.company ?? '').trim();
+}
+
+function trackerFieldIndicator() {
+  const span = document.createElement('span');
+  span.className = 'tracker-field-indicator';
+  return span;
+}
+
+function setTrackerFieldIndicator(el, text, kind) {
+  el.textContent = text || '';
+  el.classList.toggle('is-error', kind === 'error');
+  el.classList.toggle('is-ok', kind === 'ok');
+  if (kind === 'ok' && text) {
+    window.setTimeout(() => {
+      if (el.textContent === text) {
+        el.textContent = '';
+        el.classList.remove('is-ok');
+      }
+    }, 2000);
+  }
+}
+
+// Inline status dropdown for one tracker row. Every canonical state is
+// selectable except Evaluated — re-running a real evaluation is a process
+// (oferta/auto-pipeline), not a one-click edit — but Evaluated still renders
+// correctly as the CURRENT value on rows that haven't moved past it yet.
+function buildTrackerStatusControl(row) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tracker-inline-field';
+
+  const select = document.createElement('select');
+  select.className = 'tracker-status-select';
+  select.setAttribute('aria-label', `Status for ${row.company || 'row'}`);
+
+  const currentStatus = String(row.status || '').trim();
+  const canonical = trackerState.availableStates.length ? trackerState.availableStates : [];
+  const seen = new Set();
+  for (const label of canonical) {
+    if (seen.has(label)) continue;
+    seen.add(label);
+    const option = document.createElement('option');
+    option.value = label;
+    option.textContent = label;
+    if (INLINE_STATUS_LOCKED.has(label) && label !== currentStatus) option.disabled = true;
+    select.appendChild(option);
+  }
+  // Non-canonical/legacy status text (typo, older data) still needs a slot to
+  // display correctly — silently swapping it to something else would be a
+  // surprise edit the user never asked for.
+  if (currentStatus && !seen.has(currentStatus)) {
+    const option = document.createElement('option');
+    option.value = currentStatus;
+    option.textContent = currentStatus;
+    select.appendChild(option);
+  }
+  select.value = currentStatus;
+
+  const indicator = trackerFieldIndicator();
+
+  select.addEventListener('change', async () => {
+    const newState = select.value;
+    if (newState === currentStatus) return;
+    select.disabled = true;
+    setTrackerFieldIndicator(indicator, 'Saving…');
+    try {
+      await api('/api/status', {
+        method: 'POST',
+        body: JSON.stringify({ selector: trackerRowSelector(row), state: newState }),
+      });
+      setTrackerFieldIndicator(indicator, 'Saved', 'ok');
+      await loadTracker();
+    } catch (err) {
+      setTrackerFieldIndicator(indicator, formatActionError('Update failed', err), 'error');
+      select.value = currentStatus;
+      select.disabled = false;
+    }
+  });
+
+  wrap.appendChild(select);
+  wrap.appendChild(indicator);
+  return wrap;
+}
+
+// Freeform Notes editor for one tracker row — full replace via --set-note,
+// not the append-only --note semantics the global Status Action form uses.
+// Saves on blur so it doesn't fire on every keystroke.
+function buildTrackerNotesControl(row) {
+  const wrap = document.createElement('div');
+  wrap.className = 'tracker-inline-field';
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'tracker-notes-input';
+  textarea.rows = 2;
+  textarea.value = row.notes || '';
+  textarea.setAttribute('aria-label', `Notes for ${row.company || 'row'}`);
+
+  const indicator = trackerFieldIndicator();
+  let savedValue = textarea.value;
+
+  textarea.addEventListener('blur', async () => {
+    const newValue = textarea.value;
+    if (newValue === savedValue) return;
+    textarea.disabled = true;
+    setTrackerFieldIndicator(indicator, 'Saving…');
+    try {
+      await api('/api/status', {
+        method: 'POST',
+        body: JSON.stringify({ selector: trackerRowSelector(row), state: row.status, setNote: newValue }),
+      });
+      savedValue = newValue;
+      row.notes = newValue;
+      setTrackerFieldIndicator(indicator, 'Saved', 'ok');
+    } catch (err) {
+      setTrackerFieldIndicator(indicator, formatActionError('Save failed', err), 'error');
+    } finally {
+      textarea.disabled = false;
+    }
+  });
+
+  wrap.appendChild(textarea);
+  wrap.appendChild(indicator);
+  return wrap;
+}
+
+function filterTrackerRows(rows, filter) {
+  if (filter === 'active') {
+    return rows.filter((r) => ACTIVE_STATUSES.has(String(r.status || '').trim().toLowerCase()));
+  }
+  if (filter && filter !== 'all') {
+    return rows.filter((r) => String(r.status || '').trim() === filter);
+  }
+  return rows;
+}
+
+function setTrackerFilter(filter) {
+  if (trackerState.statusFilter === filter) return;
+  trackerState.statusFilter = filter;
+  // The two dedicated buttons re-sort for a fresh read; a status chip just
+  // narrows the current view without disturbing whatever sort was active.
+  if (filter === 'all' || filter === 'active') {
+    trackerState.sortKey = filter === 'active' ? 'lastUpdated' : 'date';
+    trackerState.sortDir = 'desc';
+  }
+  trackerViewAllBtn?.classList.toggle('active', filter === 'all');
+  trackerViewAllBtn?.setAttribute('aria-selected', String(filter === 'all'));
+  trackerViewActiveBtn?.classList.toggle('active', filter === 'active');
+  trackerViewActiveBtn?.setAttribute('aria-selected', String(filter === 'active'));
+  loadTracker();
+}
+
+trackerViewAllBtn?.addEventListener('click', () => setTrackerFilter('all'));
+trackerViewActiveBtn?.addEventListener('click', () => setTrackerFilter('active'));
 
 function sortTrackerRows(rows) {
   const key = trackerState.sortKey || 'date';
@@ -444,6 +674,12 @@ function trackerSortValue(row, key) {
     }
     case 'date': {
       const raw = String(row?.date || '').trim();
+      if (!raw) return Number.NEGATIVE_INFINITY;
+      const ts = Date.parse(raw.length === 10 ? `${raw}T00:00:00Z` : raw);
+      return Number.isFinite(ts) ? ts : Number.NEGATIVE_INFINITY;
+    }
+    case 'lastUpdated': {
+      const raw = String(row?.lastUpdated || row?.date || '').trim();
       if (!raw) return Number.NEGATIVE_INFINITY;
       const ts = Date.parse(raw.length === 10 ? `${raw}T00:00:00Z` : raw);
       return Number.isFinite(ts) ? ts : Number.NEGATIVE_INFINITY;
@@ -497,9 +733,8 @@ async function loadPipeline() {
 
 function renderPipeline() {
   pendingSummary.innerHTML = '';
-  if (fitFilterSummary) fitFilterSummary.innerHTML = '';
 
-  const filteredPending = applyPipelineFilters(pipelineState.pending);
+  const filteredPending = applyPipelineFilters(pipelineState.pending, { ignoreExclusions: pipelineState.showHidden });
   const sourceScopedPending = applyPipelineFilters(pipelineState.pending, { ignoreType: true });
   const typeScopedPending = applyPipelineFilters(pipelineState.pending, { ignoreSource: true });
   const exclusionSummary = summarizeExclusions(pipelineState.pending);
@@ -514,8 +749,20 @@ function renderPipeline() {
 
   renderMetric(pendingSummary, `Total: ${summary.total}`);
   renderMetric(pendingSummary, `Showing: ${summary.total} of ${pipelineState.pending.length} pending`);
-  if (exclusionSummary.totalHidden > 0) {
-    renderMetric(pendingSummary, `Hidden by fit rules: ${exclusionSummary.totalHidden}`);
+  if (hiddenJobsCount) {
+    hiddenJobsCount.textContent = exclusionSummary.totalHidden > 0 ? ` (${exclusionSummary.totalHidden})` : '';
+  }
+  const priorAppliedCount = pipelineState.pending.filter((item) => priorAppliedStatusFor(item.company)).length;
+  if (priorAppliedCount > 0) {
+    renderChip(pendingSummary, `Previously applied: ${priorAppliedCount}${pipelineState.showPriorApplied ? '' : ' (hidden)'}`, {
+      clickable: true,
+      active: pipelineState.showPriorApplied,
+      onClick: () => {
+        pipelineState.showPriorApplied = !pipelineState.showPriorApplied;
+        if (showPriorAppliedToggle) showPriorAppliedToggle.checked = pipelineState.showPriorApplied;
+        renderPipeline();
+      },
+    });
   }
   renderChip(pendingSummary, `Fractional: ${typeScopedSegments.fractional.length}`, {
     clickable: true,
@@ -547,12 +794,14 @@ function renderPipeline() {
 
   sourceEntries = sourceEntries.slice(0, 6);
 
-  if (pipelineFilters.source !== "all" || pipelineFilters.type !== "all") {
+  if (pipelineFilters.source !== "all" || pipelineFilters.type !== "all" || pipelineState.showPriorApplied) {
     renderChip(pendingSummary, "Clear filters", {
       clickable: true,
       onClick: () => {
         pipelineFilters.source = "all";
         pipelineFilters.type = "all";
+        pipelineState.showPriorApplied = false;
+        if (showPriorAppliedToggle) showPriorAppliedToggle.checked = false;
         renderPipeline();
       },
     });
@@ -568,10 +817,8 @@ function renderPipeline() {
   renderPendingTable(sortedPending);
   updateSortIndicators();
 
-  renderFitFilterSummary(exclusionSummary);
   renderStepOneGuidance(filteredPending);
   renderGoblinHint(filteredPending, exclusionSummary);
-  updateWhimsyMeter(filteredPending, exclusionSummary);
 }
 
 function renderQuickFilters(items) {
@@ -620,54 +867,26 @@ function renderPendingTable(items) {
   pendingTableBody.innerHTML = '';
   if (!items || items.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="9" class="empty-state">No pending roles match the current filters.</td>';
+    tr.innerHTML = '<td colspan="10" class="empty-state">No pending roles match the current filters.</td>';
     pendingTableBody.appendChild(tr);
     return;
   }
 
   for (const [index, item] of items.entries()) {
-    pendingTableBody.appendChild(renderPipelineItem(item, true, index));
+    pendingTableBody.appendChild(renderPipelineItem(item, true, index, firstMatchingFitRule(item)));
   }
 }
 
-function renderFitFilterSummary(exclusionSummary = { totalHidden: 0, byRule: {} }) {
-  if (!fitFilterSummary) return;
-  fitFilterSummary.innerHTML = '';
-
-  const rules = pipelineState.fitFilters || [];
-  renderChip(fitFilterSummary, `Auto-exclude rules: ${rules.length}`);
-  if ((exclusionSummary.totalHidden || 0) > 0) {
-    renderChip(fitFilterSummary, `Hidden jobs: ${exclusionSummary.totalHidden}`);
-  }
-
-  // Collapse all "Already Applied" rules into one grouped chicklet
-  const alreadyAppliedRules = rules.filter((r) => r.reasonId === 'other');
-  const otherRules = rules.filter((r) => r.reasonId !== 'other' && r.reasonId !== 'skills-mismatch');
-
-  if (alreadyAppliedRules.length > 0) {
-    const totalHidden = alreadyAppliedRules.reduce((sum, r) => sum + Number(exclusionSummary.byRule?.[r.id] || 0), 0);
-    const companies = alreadyAppliedRules.map((r) => r.company).filter(Boolean);
-    const label = `Already Applied (${alreadyAppliedRules.length})${companies.length ? ': ' + companies.join(', ') : ''}${totalHidden > 0 ? ` | hidden=${totalHidden}` : ''}`;
-    renderChip(fitFilterSummary, label);
-  }
-
-  otherRules.slice(0, 10).forEach((rule) => {
-    const hiddenCount = Number(exclusionSummary.byRule?.[rule.id] || 0);
-    const text = `${formatRuleChipText(rule)}${hiddenCount > 0 ? ` | hidden=${hiddenCount}` : ''}`;
-    renderChip(fitFilterSummary, text, {
-      clickable: true,
-      onClick: async () => {
-        const ok = window.confirm(`Remove rule?\n\n${text}`);
-        if (!ok) return;
-        await api('/api/fit-filters/remove', {
-          method: 'POST',
-          body: JSON.stringify({ id: rule.id }),
-        });
-        await loadFitFilters();
-        renderPipeline();
-      },
-    });
+async function removeFitRule(rule, promptLabel) {
+  const ok = window.confirm(`Remove rule?\n\n${promptLabel || formatRuleChipText(rule)}`);
+  if (!ok) return false;
+  await api('/api/fit-filters/remove', {
+    method: 'POST',
+    body: JSON.stringify({ id: rule.id }),
   });
+  await loadFitFilters();
+  renderPipeline();
+  return true;
 }
 
 function summarizeExclusions(items) {
@@ -715,6 +934,7 @@ function applyPipelineFilters(items, options = {}) {
   const query = String(pipelineState.query || '').trim().toLowerCase();
   return (items || []).filter((item) => {
     if (!ignoreExclusions && isExcludedByFitRules(item)) return false;
+    if (!pipelineState.showPriorApplied && priorAppliedStatusFor(item.company)) return false;
     const sourceOk = ignoreSource || sourceValue === 'all' || inferSource(item) === sourceValue;
     const itemType = item.employmentType || inferEmploymentType(item);
     const typeOk = ignoreType || typeValue === 'all' || itemType === typeValue;
@@ -790,9 +1010,9 @@ function summarizeSources(items) {
   return summary;
 }
 
-function renderPipelineItem(item, allowProcess, rowIndex = 0) {
+function renderPipelineItem(item, allowProcess, rowIndex = 0, matchRule = null) {
   const el = document.createElement('tr');
-  el.className = `pipeline-row${priorAppliedStatusFor(item.company) ? ' prior-applied-row' : ''}`;
+  el.className = `pipeline-row${priorAppliedStatusFor(item.company) ? ' prior-applied-row' : ''}${matchRule ? ' hidden-by-rule-row' : ''}`;
   el.style.setProperty('--row-index', String(Math.min(rowIndex, 40)));
 
   const source = inferSource(item);
@@ -804,8 +1024,8 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0) {
   const type = item.employmentType || inferEmploymentType(item);
   const location = displayPipelineLocation(item);
   const posted = displayPipelinePosted(item);
-  const flags = renderFlagsCell(item);
-  const openPostingLabel = 'Open Posting';
+  const flags = renderFlagsCell(item, matchRule);
+  const openPostingLabel = 'Open';
   const addedAt = formatAddedAt(item.addedAt);
   const subtitle = buildSubtitle(item, source);
 
@@ -825,6 +1045,7 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0) {
     <td><span class="chip type-${escapeHtml(type)}">${escapeHtml(type)}</span></td>
     <td>${escapeHtml(location || '-')}</td>
     <td>${escapeHtml(posted || '-')}</td>
+    <td class="score-cell"></td>
     <td>${flags}</td>
     <td class="actions-cell">
       <div class="action-stack">
@@ -834,14 +1055,17 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0) {
   `;
 
   if (allowProcess) {
+    el.querySelector('.score-cell').appendChild(makeEvaluateAction(item));
     const row = el.querySelector('.item-actions');
-    const stack = el.querySelector('.action-stack');
-    stack?.prepend(makeInlineEvaluationStatus(item.url || item.originalUrl));
     row.appendChild(makeOpenPostingLink(item, openPostingLabel));
-    row.appendChild(makePipelineActionButton('Applied', item, 'applied', 'action-applied'));
-    row.appendChild(makePipelineActionButton('Ignore', item, 'remove', 'action-processed'));
+    if (matchRule) row.appendChild(makeUnhideActionButton(matchRule));
+    row.appendChild(makePipelineActionButton('Mark Applied', item, 'applied', 'action-applied'));
     row.appendChild(makeRejectActionButton(item));
-    row.appendChild(makeEvaluateButton(item));
+  } else {
+    const score = String(item.score || '').trim();
+    el.querySelector('.score-cell').innerHTML = score
+      ? `<span class="chip score-chip clickable ${scoreClass(score)}" role="button" tabindex="0" data-report-filename="${escapeAttr(item.reportFilename || '')}">${escapeHtml(score)}</span>`
+      : '<span class="muted-cell">-</span>';
   }
 
   return el;
@@ -1020,11 +1244,14 @@ function buildSubtitle(item, source) {
   return extras.join(' | ');
 }
 
-function renderFlagsCell(item) {
+function renderFlagsCell(item, matchRule = null) {
   const flags = [];
   const priorApplied = priorAppliedStatusFor(item.company);
   if (priorApplied) {
     flags.push(`<span class="chip prior-applied-chip">Applied: ${escapeHtml(priorApplied)}</span>`);
+  }
+  if (matchRule) {
+    flags.push(`<span class="chip hidden-rule-chip" title="${escapeAttr(formatRuleChipText(matchRule))}">Hidden: ${escapeHtml(formatRuleChipText(matchRule))}</span>`);
   }
   if (!flags.length) return '<span class="muted-cell">-</span>';
   return `<div class="flags-cell">${flags.join(' ')}</div>`;
@@ -1076,6 +1303,10 @@ function sortValueForItem(item, key) {
       return displayPipelineLocation(item).toLowerCase();
     case 'posted':
       return displayPipelinePosted(item).toLowerCase();
+    case 'score': {
+      const n = parseFloat(String(item.score || '').replace('/5', ''));
+      return isFinite(n) ? n : -1;
+    }
     case 'flags':
       return priorAppliedStatusFor(item.company) ? '0' : '1';
     default:
@@ -1173,7 +1404,6 @@ function initWhimsy() {
   startHintRotation();
   startTaglineRotation();
   initThemePicker();
-  renderDailyFortune();
 }
 
 function startTaglineRotation() {
@@ -1191,28 +1421,38 @@ function startTaglineRotation() {
 }
 
 function initThemePicker() {
-  const saved = localStorage.getItem('careerops.theme') || 'calm';
-  applyTheme(saved);
-  themeButtons.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const theme = String(btn.dataset.theme || 'calm');
-      applyTheme(theme);
-      localStorage.setItem('careerops.theme', theme);
+  const stored = (() => {
+    try {
+      return localStorage.getItem(THEME_STORAGE_KEY);
+    } catch (e) {
+      return null;
+    }
+  })();
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(stored === 'dark' || stored === 'light' ? stored : (prefersDark ? 'dark' : 'light'));
+
+  const toggleBtn = document.getElementById('themeToggleBtn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const next = document.documentElement.classList.contains('theme-dark') ? 'light' : 'dark';
+      applyTheme(next);
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+      } catch (e) {}
     });
-  });
+  }
+
+  startHintRotation();
 }
 
 function applyTheme(theme) {
-  const allowed = new Set(['calm', 'gremlin', 'turbo']);
-  const next = allowed.has(theme) ? theme : 'calm';
-  whimsyState.activeTheme = next;
-  document.body.classList.remove('theme-calm', 'theme-gremlin', 'theme-turbo');
-  document.body.classList.add(`theme-${next}`);
-  themeButtons.forEach((btn) => {
-    const active = btn.dataset.theme === next;
-    btn.classList.toggle('active', active);
-  });
-  startHintRotation();
+  const isDark = theme === 'dark';
+  document.documentElement.classList.toggle('theme-dark', isDark);
+  const toggleBtn = document.getElementById('themeToggleBtn');
+  if (toggleBtn) {
+    toggleBtn.textContent = isDark ? '☀️ Light' : '🌙 Dark';
+    toggleBtn.setAttribute('aria-pressed', String(isDark));
+  }
 }
 
 function initTitleEasterEgg() {
@@ -1251,7 +1491,7 @@ function spawnConfettiDots(count) {
 
 function startHintRotation() {
   if (whimsyState.hintTimer) clearInterval(whimsyState.hintTimer);
-  const intervalMs = whimsyState.activeTheme === 'turbo' ? 4800 : whimsyState.activeTheme === 'gremlin' ? 7200 : 9000;
+  const intervalMs = 9000;
   whimsyState.hintTimer = window.setInterval(() => {
     pipelineState.hintIndex = (pipelineState.hintIndex + 1) % 7;
     renderGoblinHint(applyPipelineFilters(pipelineState.pending), summarizeExclusions(pipelineState.pending));
@@ -1288,72 +1528,6 @@ function buildGoblinHints(filteredPending, exclusionSummary) {
   hints.push('Tap the dashboard title five times if you need morale and confetti.');
 
   return hints;
-}
-
-function updateWhimsyMeter(filteredPending, exclusionSummary) {
-  if (!whimsyMeter || !whimsyMeterFill || !whimsyMeterText) return;
-  const processed = pipelineState.processed.length;
-  const hidden = Number(exclusionSummary?.totalHidden || 0);
-  const score = estimateChaosLevel(filteredPending.length, processed, hidden);
-  const moods = [
-    { max: 20, text: 'Calm spreadsheet energy' },
-    { max: 45, text: 'Focused triage momentum' },
-    { max: 70, text: 'Gremlin mode engaged' },
-    { max: 100, text: 'Maximum whimsy turbulence' },
-  ];
-  const mood = moods.find((m) => score <= m.max) || moods[moods.length - 1];
-
-  whimsyMeter.style.setProperty('--meter-score', String(score));
-  whimsyMeterFill.style.width = `${score}%`;
-  whimsyMeterText.textContent = `${score}% - ${mood.text}`;
-  updateMascotMood(score);
-}
-
-function updateMascotMood(score) {
-  if (!mascot) return;
-  const mood = score <= 24 ? 'calm' : score <= 52 ? 'focused' : score <= 78 ? 'gremlin' : 'turbo';
-  if (whimsyState.lastMood === mood) return;
-  whimsyState.lastMood = mood;
-  mascot.classList.remove('mood-calm', 'mood-focused', 'mood-gremlin', 'mood-turbo');
-  mascot.classList.add(`mood-${mood}`);
-}
-
-function renderDailyFortune() {
-  if (!goblinFortune) return;
-  const fortunes = [
-    'Fortune: The recruiter who ghosts you was not the one.',
-    'Fortune: Following up is not desperate. Silence is.',
-    'Fortune: A 4.5 fit score is not a hunch — it is a green light.',
-    'Fortune: Reject before you are rejected. Your pipeline will thank you.',
-    'Fortune: The ATS does not hate you. It hates your formatting.',
-    'Fortune: One tailored application opens more doors than ten copy-pasted ones.',
-    'Fortune: The role asking for 10 years of 2-year-old tech is a test. Fail it.',
-    'Fortune: Your future interviewer wants stories, not job descriptions.',
-    'Fortune: The company with no salary range has a number. It will disappoint you.',
-    'Fortune: Process three leads today. Future-you will be smug about it.',
-    'Fortune: Specificity is the enemy of ghosting.',
-    'Fortune: The pipeline that moves is the pipeline that wins.',
-  ];
-  const key = new Date().toISOString().slice(0, 10);
-  const idx = hashString(key) % fortunes.length;
-  goblinFortune.textContent = fortunes[idx];
-}
-
-function hashString(value) {
-  let h = 2166136261;
-  for (const ch of String(value || '')) {
-    h ^= ch.charCodeAt(0);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h >>> 0);
-}
-
-function estimateChaosLevel(pendingCount, processedCount, hiddenCount) {
-  const pendingComponent = Math.min(70, pendingCount * 0.65);
-  const processedRelief = Math.min(24, processedCount * 0.18);
-  const hiddenTurbulence = Math.min(18, hiddenCount * 0.33);
-  const raw = 22 + pendingComponent + hiddenTurbulence - processedRelief;
-  return Math.max(6, Math.min(100, Math.round(raw)));
 }
 
 function inferSource(item) {
@@ -1548,16 +1722,52 @@ function celebratePipelineAction(label, action) {
   window.setTimeout(() => toast.remove(), 3200);
 }
 
-function makeEvaluateButton(item) {
+// Single action slot per pipeline row: Evaluate button -> spinning "Evaluating"
+// chip while a run is in flight -> score + Report link once done. A row that
+// already has a report (this session's job, or a prior report found on load)
+// never shows the Evaluate button again.
+function makeEvaluateAction(item) {
+  const url = String(item?.url || item?.originalUrl || '').trim();
+  const job = latestEvaluationForUrl(url);
+  const status = job?.status || '';
+
+  if (status === 'running') {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'eval-inline-chip status-running';
+    chip.dataset.evalOpen = job.id;
+    chip.title = 'Open this run in Evaluate tab';
+    const spinner = document.createElement('span');
+    spinner.className = 'eval-inline-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    chip.appendChild(spinner);
+    chip.appendChild(document.createTextNode('Evaluating'));
+    return chip;
+  }
+
+  const reportFilename = (status === 'success' ? job.reportSlug : '') || item.reportFilename || '';
+  const score = (status === 'success' ? job.score : '') || item.score || '';
+
+  if (reportFilename) {
+    const chip = document.createElement('span');
+    chip.className = `chip score-chip clickable ${scoreClass(score)}`;
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('tabindex', '0');
+    chip.dataset.reportFilename = reportFilename;
+    chip.title = 'Open evaluation report';
+    chip.textContent = score || 'Report';
+    return chip;
+  }
+
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'secondary action-evaluate';
-  btn.textContent = 'Evaluate';
-  btn.title = 'Run AI evaluation on this posting';
-  const rowUrl = String(item?.url || item?.originalUrl || '').trim();
-  const rowSource = String(item?.source || inferSource(item) || 'pipeline').trim();
-  btn.dataset.evaluateUrl = rowUrl;
-  btn.dataset.evaluateSource = rowSource;
+  btn.textContent = status === 'error' ? 'Retry Evaluate' : 'Evaluate';
+  btn.title = status === 'error'
+    ? `Evaluation failed${job?.error ? `: ${job.error}` : ''} — click to retry`
+    : 'Run AI evaluation on this posting';
+  btn.dataset.evaluateUrl = url;
+  btn.dataset.evaluateSource = String(item?.source || inferSource(item) || 'pipeline').trim();
   btn.addEventListener('click', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1567,7 +1777,6 @@ function makeEvaluateButton(item) {
       showToast('No posting URL found for this row', 'error');
       return;
     }
-    setActiveTab('evaluate');
     const urlInput = document.getElementById('evaluateUrl');
     if (urlInput) urlInput.value = targetUrl;
     runEvaluation(targetUrl, { sourceLabel, focusJob: true });
@@ -1575,47 +1784,11 @@ function makeEvaluateButton(item) {
   return btn;
 }
 
-function makeInlineEvaluationStatus(url) {
-  const current = latestEvaluationForUrl(url);
-  const status = current?.status || '';
-  const wrap = document.createElement('div');
-  wrap.className = 'eval-inline-status';
-  if (!status) return wrap;
-
-  const label = document.createElement('button');
-  label.type = 'button';
-  label.className = `eval-inline-chip status-${status}`;
-  label.dataset.evalOpen = current.id;
-  label.title = 'Open this run in Evaluate tab';
-  if (status === 'running') {
-    const spinner = document.createElement('span');
-    spinner.className = 'eval-inline-spinner';
-    spinner.setAttribute('aria-hidden', 'true');
-    label.appendChild(spinner);
-  }
-  label.appendChild(document.createTextNode(inlineStatusLabel(status)));
-  wrap.appendChild(label);
-  return wrap;
-}
-
-function latestEvaluationStatusForUrl(url) {
-  const match = latestEvaluationForUrl(url);
-  return match?.status || '';
-}
-
 function latestEvaluationForUrl(url) {
   const normalized = String(url || '').trim();
   if (!normalized) return '';
   const job = evaluateState.jobs.find((entry) => String(entry.url || '').trim() === normalized);
   return job || null;
-}
-
-function inlineStatusLabel(status) {
-  if (status === 'running') return 'Evaluating';
-  if (status === 'success') return 'Evaluated';
-  if (status === 'error') return 'Eval failed';
-  if (status === 'cancelled') return 'Cancelled';
-  return '';
 }
 
 function makeRejectActionButton(item) {
@@ -1638,15 +1811,26 @@ function makeRejectActionButton(item) {
         method: 'POST',
         body: JSON.stringify({ item: rowPayload, action: 'reject', rejectRule: hasAnyRuleScope(rule) ? rule : null }),
       });
-      const refresh = await Promise.allSettled([loadPipeline(), loadFitFilters()]);
-      const failedRefresh = refresh.find((r) => r.status === 'rejected');
-      if (failedRefresh && failedRefresh.status === 'rejected') {
-        window.alert(formatActionError('Rejected, but refresh failed', failedRefresh.reason));
+      try {
+        await loadFitFilters();
+        await loadPipeline();
+      } catch (refreshErr) {
+        window.alert(formatActionError('Rejected, but refresh failed', refreshErr));
       }
     } catch (err) {
       window.alert(formatActionError('Reject failed', err));
     }
   });
+  return btn;
+}
+
+function makeUnhideActionButton(rule) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'secondary action-unhide';
+  btn.textContent = 'Unhide (remove rule)';
+  btn.title = formatRuleChipText(rule);
+  btn.addEventListener('click', () => removeFitRule(rule));
   return btn;
 }
 
@@ -1660,27 +1844,53 @@ function ensureRejectReasonSelect() {
   });
 }
 
-function getDefaultRejectScope(reasonId) {
-  if (reasonId === 'company-stage') return { company: true, source: false, type: false };
-  if (reasonId === 'source-quality') return { company: false, source: true, type: false };
-  if (reasonId === 'employment-type-mismatch') return { company: false, source: false, type: true };
-  if (reasonId === 'location-mismatch') return { company: false, source: false, type: false };
-  if (reasonId === 'timing-mismatch') return { company: true, source: false, type: false };
-  if (reasonId === 'previously-applied') return { company: true, source: false, type: false };
-  return { company: false, source: false, type: false };
-}
-
 function applyRejectDefaults(item) {
   const reasonId = rejectReasonSelect?.value || rejectReasons[0].id;
   const reason = rejectReasons.find((r) => r.id === reasonId) || rejectReasons[0];
-  const defaults = getDefaultRejectScope(reasonId);
+  const defaults = normalizeRuleScope(buildReasonFallbackRule(item, reasonId));
 
   if (rejectReasonHelp) rejectReasonHelp.textContent = reason.help;
-  if (rejectCompanyChk) rejectCompanyChk.checked = defaults.company;
-  if (rejectSourceChk) rejectSourceChk.checked = defaults.source;
-  if (rejectTypeChk) rejectTypeChk.checked = defaults.type;
-  if (rejectRoleKeywords) rejectRoleKeywords.value = suggestRoleKeywords(reasonId, item).join(', ');
-  if (rejectLocationKeywords) rejectLocationKeywords.value = suggestLocationKeywords(reasonId, item).join(', ');
+  if (rejectCompanyChk) rejectCompanyChk.checked = Boolean(defaults.company);
+  if (rejectSourceChk) rejectSourceChk.checked = Boolean(defaults.source);
+  if (rejectTypeChk) rejectTypeChk.checked = Boolean(defaults.employmentType);
+  if (rejectRoleKeywords) rejectRoleKeywords.value = defaults.roleKeywords.join(', ');
+  if (rejectLocationKeywords) rejectLocationKeywords.value = defaults.locationKeywords.join(', ');
+  updateRejectPreview(item);
+}
+
+function parseCsvKeywords(value) {
+  return String(value || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function currentRejectRuleFromForm(item) {
+  return normalizeRuleScope({
+    company: rejectCompanyChk?.checked ? String(item?.company || '').trim() : '',
+    source: rejectSourceChk?.checked ? inferSource(item) : '',
+    employmentType: rejectTypeChk?.checked ? (item.employmentType || inferEmploymentType(item)) : '',
+    roleKeywords: parseCsvKeywords(rejectRoleKeywords?.value || ''),
+    locationKeywords: parseCsvKeywords(rejectLocationKeywords?.value || ''),
+  });
+}
+
+function updateRejectPreview(item) {
+  if (!rejectPreview) return;
+  rejectPreview.textContent = formatRejectPreview(currentRejectRuleFromForm(item));
+}
+
+function formatRejectPreview(rule) {
+  if (!hasAnyRuleScope(rule)) return 'No auto-exclude filter will be saved for this reason.';
+
+  const bits = [];
+  if (rule.company) bits.push(`company = ${rule.company}`);
+  if (rule.source) bits.push(`source = ${rule.source}`);
+  if (rule.employmentType) bits.push(`type = ${rule.employmentType}`);
+  if (rule.roleKeywords.length) bits.push(`role ~ ${rule.roleKeywords.join(', ')}`);
+  if (rule.locationKeywords.length) bits.push(`location ~ ${rule.locationKeywords.join(', ')}`);
+  return `Will auto-exclude future matches by ${bits.join(' + ')}.`;
 }
 
 function suggestRoleKeywords(reasonId, item) {
@@ -1707,14 +1917,6 @@ function suggestLocationKeywords(reasonId, item) {
     .slice(0, 3);
 }
 
-function parseCsvKeywords(value) {
-  return String(value || '')
-    .split(',')
-    .map((v) => v.trim().toLowerCase())
-    .filter(Boolean)
-    .slice(0, 8);
-}
-
 function uniqueKeywords(values) {
   return [...new Set((values || []).map((v) => String(v || '').trim().toLowerCase()).filter(Boolean))].slice(0, 8);
 }
@@ -1726,7 +1928,7 @@ function buildReasonFallbackRule(item, reasonId) {
   const roleKeywords = suggestRoleKeywords(reasonId, item);
   const locationKeywords = suggestLocationKeywords(reasonId, item);
 
-  if (reasonId === 'no-longer-accepting') {
+  if (reasonId === 'no-longer-accepting' || reasonId === 'score-too-low') {
     return {};
   }
   if (reasonId === 'company-stage' || reasonId === 'timing-mismatch' || reasonId === 'previously-applied') {
@@ -1739,11 +1941,11 @@ function buildReasonFallbackRule(item, reasonId) {
     return { employmentType };
   }
   if (reasonId === 'location-mismatch') {
-    if (locationKeywords.length) return { locationKeywords };
+    if (locationKeywords.length) return { locationKeywords, source, employmentType };
     return { company };
   }
 
-  if (roleKeywords.length) return { roleKeywords };
+  if (roleKeywords.length) return { roleKeywords, source, employmentType };
   return { company };
 }
 
@@ -1753,37 +1955,13 @@ function hasAnyRuleScope(rule) {
   );
 }
 
-function withReasonFallbackRule(item, reasonId, rule) {
-  const base = {
+function normalizeRuleScope(rule) {
+  return {
     company: String(rule.company || '').trim(),
     source: String(rule.source || '').trim(),
     employmentType: String(rule.employmentType || '').trim(),
     roleKeywords: uniqueKeywords(rule.roleKeywords || []),
     locationKeywords: uniqueKeywords(rule.locationKeywords || []),
-  };
-
-  if (hasAnyRuleScope(base)) {
-    const hasKeywordsOnly =
-      !base.company &&
-      !base.source &&
-      !base.employmentType &&
-      ((base.roleKeywords && base.roleKeywords.length > 0) || (base.locationKeywords && base.locationKeywords.length > 0));
-
-    if (hasKeywordsOnly) {
-      base.source = inferSource(item);
-      base.employmentType = item.employmentType || inferEmploymentType(item);
-    }
-
-    return base;
-  }
-
-  const fallback = buildReasonFallbackRule(item, reasonId);
-  return {
-    company: String(fallback.company || '').trim(),
-    source: String(fallback.source || '').trim(),
-    employmentType: String(fallback.employmentType || '').trim(),
-    roleKeywords: uniqueKeywords(fallback.roleKeywords || []),
-    locationKeywords: uniqueKeywords(fallback.locationKeywords || []),
   };
 }
 
@@ -1797,11 +1975,22 @@ function promptRejectRule(item) {
   applyRejectDefaults(item);
 
   const onReasonChange = () => applyRejectDefaults(item);
+  const onFieldChange = () => updateRejectPreview(item);
   rejectReasonSelect.addEventListener('change', onReasonChange);
+  rejectCompanyChk?.addEventListener('change', onFieldChange);
+  rejectSourceChk?.addEventListener('change', onFieldChange);
+  rejectTypeChk?.addEventListener('change', onFieldChange);
+  rejectRoleKeywords?.addEventListener('input', onFieldChange);
+  rejectLocationKeywords?.addEventListener('input', onFieldChange);
 
   return new Promise((resolve) => {
     const cleanup = () => {
       rejectReasonSelect.removeEventListener('change', onReasonChange);
+      rejectCompanyChk?.removeEventListener('change', onFieldChange);
+      rejectSourceChk?.removeEventListener('change', onFieldChange);
+      rejectTypeChk?.removeEventListener('change', onFieldChange);
+      rejectRoleKeywords?.removeEventListener('input', onFieldChange);
+      rejectLocationKeywords?.removeEventListener('input', onFieldChange);
       rejectForm.removeEventListener('submit', onSubmit);
       rejectCancelBtn?.removeEventListener('click', onCancel);
       rejectModal.removeEventListener('cancel', onCancel);
@@ -1818,16 +2007,7 @@ function promptRejectRule(item) {
       const reasonId = rejectReasonSelect.value;
       const reason = rejectReasons.find((r) => r.id === reasonId) || rejectReasons[0];
 
-      const rule = withReasonFallbackRule(item, reasonId, {
-        reasonId: reason.id,
-        reasonLabel: reason.label,
-        company: rejectCompanyChk?.checked ? (item.company || '') : '',
-        source: rejectSourceChk?.checked ? inferSource(item) : '',
-        employmentType: rejectTypeChk?.checked ? (item.employmentType || inferEmploymentType(item)) : '',
-        roleKeywords: parseCsvKeywords(rejectRoleKeywords?.value || ''),
-        locationKeywords: parseCsvKeywords(rejectLocationKeywords?.value || ''),
-      });
-
+      const rule = currentRejectRuleFromForm(item);
       rule.reasonId = reason.id;
       rule.reasonLabel = reason.label;
 
@@ -2032,15 +2212,39 @@ function buildBarChart(items, max, title, showValue = false) {
 
 let reportsLoaded = false;
 
+function openReportFromPipeline(filename) {
+  if (!filename) return;
+  setActiveTab('reports');
+  loadReports().then(() => {
+    const btn = document.querySelector(`.report-list-item[data-slug="${escapeAttr(filename)}"]`);
+    if (btn) {
+      btn.click();
+      btn.scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
+function updateReportsScrollShadow(el) {
+  if (!el) return;
+  const hasOverflow = el.scrollHeight > el.clientHeight + 1;
+  el.classList.toggle('has-more-above', hasOverflow && el.scrollTop > 2);
+  el.classList.toggle('has-more-below', hasOverflow && el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+}
+
 async function loadReports() {
   if (reportsLoaded) return;
   const el = document.getElementById('reportsList');
+  const countEl = document.getElementById('reportsCount');
   if (!el) return;
   el.innerHTML = '<p class="chart-empty">Loading…</p>';
   try {
     const data = await api('/api/reports');
     const reports = Array.isArray(data.reports) ? data.reports : [];
+    reports.sort((a, b) => reportScoreValue(b.score) - reportScoreValue(a.score));
+    reportsState.items = reports;
     reportsLoaded = true;
+    renderReportsToolbar();
+    if (countEl) countEl.textContent = reports.length ? ` · ${reports.length}` : '';
     if (!reports.length) { el.innerHTML = '<p class="chart-empty">No reports found.</p>'; return; }
     el.innerHTML = reports.map((r) => `
       <button class="report-list-item" type="button" data-slug="${escapeAttr(r.filename)}">
@@ -2055,12 +2259,17 @@ async function loadReports() {
     el.querySelectorAll('.report-list-item').forEach((btn) => {
       btn.addEventListener('click', () => openReport(btn.dataset.slug, btn));
     });
+    el.addEventListener('scroll', () => updateReportsScrollShadow(el));
+    window.addEventListener('resize', () => updateReportsScrollShadow(el));
+    updateReportsScrollShadow(el);
   } catch (err) {
     el.innerHTML = `<p class="chart-empty">Error: ${escapeHtml(String(err.message))}</p>`;
   }
 }
 
 async function openReport(slug, activeBtn) {
+  reportsState.selectedSlug = String(slug || '').trim();
+  renderReportsToolbar();
   document.querySelectorAll('.report-list-item').forEach((b) => b.classList.remove('is-active'));
   activeBtn?.classList.add('is-active');
   const viewer = document.getElementById('reportsViewer');
@@ -2075,6 +2284,95 @@ async function openReport(slug, activeBtn) {
   }
 }
 
+function selectedReportMeta() {
+  const slug = String(reportsState.selectedSlug || '').trim();
+  if (!slug) return null;
+  return reportsState.items.find((item) => String(item.filename || '').trim() === slug) || null;
+}
+
+function renderReportsToolbar() {
+  if (!reportsGeneratePdfBtn || !reportsToolbarMeta) return;
+  const selected = selectedReportMeta();
+  const company = String(selected?.company || '').trim();
+  const pdfFilename = String(selected?.pdfFilename || '').trim();
+
+  if (reportsDownloadResumeLink) {
+    if (pdfFilename) {
+      reportsDownloadResumeLink.href = `/download/resume/${encodeURIComponent(pdfFilename)}`;
+      reportsDownloadResumeLink.classList.remove('is-hidden');
+    } else {
+      reportsDownloadResumeLink.removeAttribute('href');
+      reportsDownloadResumeLink.classList.add('is-hidden');
+    }
+  }
+
+  if (!selected) {
+    reportsGeneratePdfBtn.disabled = true;
+    reportsGeneratePdfBtn.textContent = 'Create PDF On Demand';
+    reportsToolbarMeta.textContent = 'Select a report to enable PDF generation.';
+    return;
+  }
+
+  reportsGeneratePdfBtn.disabled = reportsState.pdfRunning || !company;
+  reportsGeneratePdfBtn.textContent = reportsState.pdfRunning ? 'Generating…' : 'Create PDF On Demand';
+  reportsToolbarMeta.textContent = company
+    ? `Runs /career-ops pdf ${company}`
+    : 'Company name missing in this report header.';
+}
+
+async function generateSelectedReportPdf() {
+  const selected = selectedReportMeta();
+  const company = String(selected?.company || '').trim();
+  if (!company) {
+    showToast('Select a report with a company name first', 'error');
+    return;
+  }
+
+  reportsState.pdfRunning = true;
+  renderReportsToolbar();
+  try {
+    await api('/api/reports/pdf-on-demand', {
+      method: 'POST',
+      body: JSON.stringify({ company }),
+    });
+    showToast(`PDF flow finished for ${company}`, 'success');
+    // Re-fetch so the new PDF's download link shows up without a full page refresh.
+    const selectedSlug = reportsState.selectedSlug;
+    reportsLoaded = false;
+    await loadReports();
+    if (selectedSlug) {
+      const btn = document.querySelector(`.report-list-item[data-slug="${escapeAttr(selectedSlug)}"]`);
+      reportsState.selectedSlug = selectedSlug;
+      btn?.classList.add('is-active');
+    }
+  } catch (err) {
+    showToast(`PDF generation failed: ${String(err.message || err)}`, 'error');
+  } finally {
+    reportsState.pdfRunning = false;
+    renderReportsToolbar();
+  }
+}
+
+async function reportInfoForUrl(url) {
+  const targetUrl = String(url || '').trim();
+  if (!targetUrl) return { filename: '', score: '' };
+  try {
+    const data = await api(`/api/reports/by-url?url=${encodeURIComponent(targetUrl)}`);
+    return { filename: String(data.filename || '').trim(), score: String(data.score || '').trim() };
+  } catch {
+    return { filename: '', score: '' };
+  }
+}
+
+async function openReportFromEvaluate(reportSlug) {
+  const slug = String(reportSlug || '').trim();
+  if (!slug) return;
+  setActiveTab('reports');
+  if (!reportsLoaded) await loadReports();
+  const btn = document.querySelector(`.report-list-item[data-slug="${escapeAttr(slug)}"]`);
+  await openReport(slug, btn instanceof HTMLElement ? btn : null);
+}
+
 function scoreClass(score) {
   const n = parseFloat(String(score || '').replace('/5', ''));
   if (!isFinite(n)) return '';
@@ -2082,6 +2380,12 @@ function scoreClass(score) {
   if (n >= 4.0) return 'score-mid';
   if (n >= 3.0) return 'score-low';
   return 'score-skip';
+}
+
+// Missing/unparseable scores sort to the bottom, below the 0-5 range.
+function reportScoreValue(score) {
+  const n = parseFloat(String(score || '').replace('/5', ''));
+  return isFinite(n) ? n : -1;
 }
 
 // ─── Evaluate ─────────────────────────────────────────────────────────────────
@@ -2118,11 +2422,24 @@ evaluateJobsList?.addEventListener('click', (ev) => {
     return;
   }
 
+  const reportSlug = target.dataset.evalReport;
+  if (reportSlug) {
+    openReportFromEvaluate(reportSlug);
+    return;
+  }
+
   const cancelId = target.dataset.evalCancel;
-  if (!cancelId) return;
-  const job = evaluateState.jobs.find((j) => j.id === cancelId);
-  if (!job || job.status !== 'running') return;
-  job.controller.abort();
+  if (cancelId) {
+    const job = evaluateState.jobs.find((j) => j.id === cancelId);
+    if (job && job.status === 'running') job.controller.abort();
+    return;
+  }
+
+  const retryId = target.dataset.evalRetry;
+  if (!retryId) return;
+  const failedJob = evaluateState.jobs.find((j) => j.id === retryId);
+  if (!failedJob || failedJob.status !== 'error') return;
+  runEvaluation(failedJob.url, { sourceLabel: failedJob.sourceLabel, focusJob: true });
 });
 
 function runEvaluation(url, options = {}) {
@@ -2139,6 +2456,8 @@ function runEvaluation(url, options = {}) {
     finishedAt: 0,
     output: '',
     verdict: '',
+    reportSlug: '',
+    score: '',
     exitCode: null,
     error: '',
     controller: new AbortController(),
@@ -2203,6 +2522,9 @@ async function startEvaluationJob(job) {
             job.exitCode = payload.code;
             if (payload.code === 0) {
               job.status = 'success';
+              const reportInfo = await reportInfoForUrl(job.url);
+              job.reportSlug = reportInfo.filename;
+              job.score = reportInfo.score;
               showToast('Evaluation complete — report + tracker updated', 'success');
               reportsLoaded = false; // force reload on next visit
               loadTracker();
@@ -2280,7 +2602,9 @@ function renderEvaluationJobs() {
         <div class="eval-job-url">${escapeHtml(compactUrl(job.url))}</div>
         <div class="eval-job-actions">
           <button type="button" class="secondary" data-eval-select="${escapeAttr(job.id)}">View</button>
+          ${!running && job.reportSlug ? `<button type="button" class="secondary" data-eval-report="${escapeAttr(job.reportSlug)}">Report</button>` : ''}
           ${running ? `<button type="button" class="secondary" data-eval-cancel="${escapeAttr(job.id)}">Cancel</button>` : ''}
+          ${job.status === 'error' ? `<button type="button" class="secondary action-retry" data-eval-retry="${escapeAttr(job.id)}">Retry</button>` : ''}
         </div>
       </article>`;
   }).join('');

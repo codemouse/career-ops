@@ -5,7 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CareerOps Quick Dashboard</title>
   <link rel="stylesheet" href="/styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js" defer></script>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('careerops-theme');
+        var dark = stored ? stored === 'dark' : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.classList.add('theme-dark');
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -24,38 +33,28 @@
         <p id="brandTagline" class="brand-tagline">Chaos-tested. Goblin-approved.</p>
       </div>
     </div>
-    <div id="whimsyMeter" class="whimsy-meter" aria-live="polite" aria-label="Pipeline whimsy meter">
-      <span class="meter-label">Chaos Level</span>
-      <span class="meter-track" aria-hidden="true"><span id="whimsyMeterFill" class="meter-fill"></span></span>
-      <span id="whimsyMeterText" class="meter-value">Calibrating...</span>
-      <span id="goblinFortune" class="goblin-fortune">Fortune loading...</span>
-    </div>
-    <div class="theme-picker" role="group" aria-label="Theme preset">
-      <button type="button" class="theme-btn active" data-theme="calm">Calm</button>
-      <button type="button" class="theme-btn" data-theme="gremlin">Gremlin</button>
-      <button type="button" class="theme-btn" data-theme="turbo">Turbo</button>
-    </div>
-    <div class="actions">
-      <a class="toplink" href="/download/recruiter-resume" target="_blank" rel="noopener">Recruiter Resume</a>
-      <a class="toplink" href="/download/full-resume" target="_blank" rel="noopener">Full Resume</a>
-      <button id="refreshBtn">Refresh</button>
-      <button id="scanBtn">Run Scan</button>
-    </div>
   </header>
 
   <main class="layout">
     <section class="card" id="tabCard">
-      <div class="tab-row" role="tablist" aria-label="Dashboard Views">
-        <button id="pipelineTabBtn" class="tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="pipelinePanel">Pending Pipeline</button>
-        <button id="manageTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="managePanel">Tracker + Status</button>
-        <button id="analyticsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="analyticsPanel">Analytics</button>
-        <button id="reportsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="reportsPanel">Reports</button>
-        <button id="evaluateTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="evaluatePanel">Evaluate</button>
+      <div class="tab-row tab-row-main">
+        <div class="tab-buttons" role="tablist" aria-label="Dashboard Views">
+          <button id="pipelineTabBtn" class="tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="pipelinePanel">Pending Pipeline</button>
+          <button id="manageTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="managePanel">Tracker + Status</button>
+          <button id="analyticsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="analyticsPanel">Analytics</button>
+          <button id="reportsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="reportsPanel">Reports</button>
+          <button id="evaluateTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="evaluatePanel">Evaluate</button>
+        </div>
+        <div class="actions tab-actions">
+          <button id="themeToggleBtn" class="secondary theme-toggle-btn" type="button" aria-pressed="false">🌙 Dark</button>
+          <button id="refreshBtn">Refresh</button>
+          <button id="scanBtn">Run Scan</button>
+        </div>
       </div>
 
       <div id="pipelinePanel" class="tab-panel" role="tabpanel" aria-labelledby="pipelineTabBtn">
         <section class="card" id="startCard">
-          <h2 class="section-title mascot-friend">CareerOps Start Here</h2>
+          <h2 class="section-title">CareerOps Start Here</h2>
           <div id="opsChecklist" class="chips"></div>
           <div class="actions" style="margin-bottom:10px; flex-wrap: wrap;">
             <button id="baselineRefreshBtn" type="button">Refresh Baseline</button>
@@ -67,7 +66,7 @@
         </section>
 
         <section class="card" id="pipelineCard">
-          <h2 class="section-title mascot-friend">Pipeline Pending</h2>
+          <h2 class="section-title">Pipeline Pending</h2>
           <div class="pipeline-toolbar">
             <label class="pipeline-search">
               Search
@@ -81,11 +80,20 @@
               Type
               <select id="typeFilterSelect"></select>
             </label>
+            <label class="pipeline-toggle">
+              <input type="checkbox" id="showHiddenToggle" />
+              Show hidden jobs<span id="hiddenJobsCount" class="hidden-count"></span>
+            </label>
+            <label class="pipeline-toggle">
+              <input type="checkbox" id="showPriorAppliedToggle" />
+              Show previously applied
+            </label>
             <button id="clearAllFiltersBtn" class="secondary" type="button">Clear All Filters</button>
             <button id="addToPipelineBtn" type="button">+ Add Job</button>
           </div>
-          <div id="pendingSummary" class="chips"></div>
-          <div id="fitFilterSummary" class="chips"></div>
+          <div id="pendingSummary" class="chips">
+            <span class="chip">Loading…</span>
+          </div>
           <div id="goblinHint" class="goblin-hint" aria-live="polite"></div>
           <div class="table-wrap pipeline-table-wrap">
             <table id="pendingTable" class="pipeline-table">
@@ -98,11 +106,12 @@
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="employmentType">Type</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="location">Location</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="posted">Posted</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="score">Score</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="flags">Flags</button></th>
                   <th scope="col" class="actions-col">Actions</th>
                 </tr>
               </thead>
-              <tbody></tbody>
+              <tbody><tr><td colspan="10" class="empty-state">Loading pipeline…</td></tr></tbody>
             </table>
           </div>
         </section>
@@ -110,7 +119,11 @@
 
       <div id="managePanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="manageTabBtn">
         <section class="card" id="trackerCard">
-          <h2 class="section-title mascot-friend">Applications Tracker</h2>
+          <h2 class="section-title">Applications Tracker</h2>
+          <div class="tab-row tab-row-sub" role="tablist" aria-label="Tracker Views">
+            <button id="trackerViewAllBtn" class="tab-btn active" type="button" role="tab" aria-selected="true">All</button>
+            <button id="trackerViewActiveBtn" class="tab-btn" type="button" role="tab" aria-selected="false">Active</button>
+          </div>
           <div id="trackerSummary" class="chips"></div>
           <div class="table-wrap">
             <table id="trackerTable">
@@ -122,6 +135,7 @@
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="role">Role</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="score">Score</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="status">Status</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="lastUpdated">Last Updated</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="notes">Notes</button></th>
                 </tr>
               </thead>
@@ -131,7 +145,7 @@
         </section>
 
         <section class="card">
-          <h2 class="section-title mascot-friend">Status Action</h2>
+          <h2 class="section-title">Status Action</h2>
           <form id="statusForm">
             <label>
               Selector (report # or company)
@@ -153,15 +167,15 @@
 
       <div id="analyticsPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="analyticsTabBtn">
         <section class="card">
-          <h2 class="section-title mascot-friend">Pipeline Funnel</h2>
+          <h2 class="section-title">Pipeline Funnel</h2>
           <div id="funnelChart" class="chart-wrap"></div>
         </section>
         <section class="card">
-          <h2 class="section-title mascot-friend">Score Distribution</h2>
+          <h2 class="section-title">Score Distribution</h2>
           <div id="scoreChart" class="chart-wrap"></div>
         </section>
         <section class="card">
-          <h2 class="section-title mascot-friend">Top Companies by Score</h2>
+          <h2 class="section-title">Top Companies by Score</h2>
           <div id="topCompaniesChart" class="chart-wrap"></div>
         </section>
       </div>
@@ -169,10 +183,15 @@
       <div id="reportsPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="reportsTabBtn">
         <section class="card reports-layout">
           <div class="reports-list-col">
-            <h2 class="section-title mascot-friend">Evaluation Reports</h2>
+            <h2 class="section-title">Evaluation Reports<span id="reportsCount" class="reports-count"></span></h2>
             <div id="reportsList" class="reports-list"></div>
           </div>
           <div class="reports-viewer-col">
+            <div class="reports-toolbar">
+              <button id="reportsGeneratePdfBtn" type="button" class="secondary" disabled>Create PDF On Demand</button>
+              <a id="reportsDownloadResumeLink" class="report-download-link is-hidden" href="#" target="_blank" rel="noopener">⬇ Download Resume</a>
+              <span id="reportsToolbarMeta" class="muted-cell">Select a report to enable PDF generation.</span>
+            </div>
             <div id="reportsViewer" class="reports-viewer">
               <p class="reports-empty-hint">Select a report to read it.</p>
             </div>
@@ -182,7 +201,7 @@
 
       <div id="evaluatePanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="evaluateTabBtn">
         <section class="card">
-          <h2 class="section-title mascot-friend">Evaluate a Job Posting</h2>
+          <h2 class="section-title">Evaluate a Job Posting</h2>
           <p class="section-sub">Runs the full career-ops evaluation (modes/oferta.md) via Claude and persists the report + tracker row — identical to a CLI run.</p>
           <form id="evaluateForm" class="evaluate-form">
             <label>
@@ -204,7 +223,7 @@
   <dialog id="rejectModal" class="reject-modal">
     <form id="rejectForm" class="reject-form">
       <h3>Reject and Teach Filters</h3>
-      <p class="reject-subtitle">Choose why this is not a fit, then pick what should be auto-excluded next time.</p>
+      <p class="reject-subtitle">Choose why this is not a fit — the root cause decides what gets auto-excluded next time.</p>
 
       <label>
         Reason
@@ -228,6 +247,8 @@
         Location keywords to exclude (comma-separated)
         <input id="rejectLocationKeywords" placeholder="e.g. onsite, berlin" />
       </label>
+
+      <div id="rejectPreview" class="reject-preview"></div>
 
       <div class="actions reject-actions">
         <button type="button" id="rejectCancelBtn" class="secondary">Cancel</button>
