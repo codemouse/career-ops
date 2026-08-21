@@ -40,10 +40,11 @@ import { stripEmptySections } from '../cv-sections-core.mjs';
 
 console.log('\ncv-sections-core.mjs — optional sections leave no bare header');
 
-const EMPTY = { competencies: [], projects: [], education: [], certifications: [], awards: [], skills: [] };
+const EMPTY = { competencies: [], projects: [], earlier_experience: [], education: [], certifications: [], awards: [], skills: [] };
 const FULL = {
   competencies: ['Tag'],
   projects: [{ name: 'P' }],
+  earlier_experience: [{ role: 'R', company: 'C' }],
   education: [{ degree: 'D' }],
   certifications: [{ title: 'C' }],
   awards: [{ title: 'A' }],
@@ -62,12 +63,12 @@ function check(label, actual, expected) {
 // are empty — the `<!-- END -->` / `%%%% END %%%%` marker itself, never the
 // (now-strippable) SKILLS marker or its content.
 const TEMPLATES = [
-  { file: 'templates/cv-template.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true },
-  { file: 'templates/resume-template.html', format: 'html', after: '<!-- END -->', hasCertifications: false, hasCompetencies: true },
-  { file: 'templates/cv-template.tex', format: 'tex', after: '%%%%  END  %%%%', hasCertifications: false, hasCompetencies: false },
+  { file: 'templates/cv-template.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasEarlierExperience: true },
+  { file: 'templates/resume-template.html', format: 'html', after: '<!-- END -->', hasCertifications: false, hasCompetencies: true, hasEarlierExperience: false },
+  { file: 'templates/cv-template.tex', format: 'tex', after: '%%%%  END  %%%%', hasCertifications: false, hasCompetencies: false, hasEarlierExperience: false },
 ];
 
-for (const { file, format, after, hasCertifications, hasCompetencies } of TEMPLATES) {
+for (const { file, format, after, hasCertifications, hasCompetencies, hasEarlierExperience } of TEMPLATES) {
   const template = readFileSync(join(ROOT, file), 'utf-8');
   const name = file.split('/').pop();
   const closingSkeleton = format === 'html' ? '</body>\n</html>' : '\\end{document}';
@@ -79,6 +80,7 @@ for (const { file, format, after, hasCertifications, hasCompetencies } of TEMPLA
   const competenciesMarker = '<!-- CORE COMPETENCIES -->'; // html-only; no LaTeX Competencies section exists
   const awardsMarker = format === 'html' ? '<!-- AWARDS -->' : 'AWARDS  %';
   const skillsMarker = format === 'html' ? '<!-- SKILLS -->' : 'Technical Skills  %';
+  const earlierExperienceMarker = '<!-- EARLIER EXPERIENCE -->'; // html-only; no LaTeX Earlier Experience section exists
 
   check(`${name}: empty payload removes the projects block`, stripped.includes(projectsMarker), false);
   check(`${name}: empty payload removes the education block`, stripped.includes(educationMarker), false);
@@ -87,6 +89,9 @@ for (const { file, format, after, hasCertifications, hasCompetencies } of TEMPLA
   }
   if (hasCompetencies) {
     check(`${name}: empty payload removes the competencies block`, stripped.includes(competenciesMarker), false);
+  }
+  if (hasEarlierExperience) {
+    check(`${name}: empty payload removes the earlier-experience block`, stripped.includes(earlierExperienceMarker), false);
   }
   check(`${name}: empty payload removes the awards block`, stripped.includes(awardsMarker), false);
   check(`${name}: empty payload removes the skills block`, stripped.includes(skillsMarker), false);
@@ -104,6 +109,17 @@ for (const { file, format, after, hasCertifications, hasCompetencies } of TEMPLA
   check(`${name}: empty education alone drops education`, onlyEdu.includes(educationMarker), false);
   check(`${name}: empty education alone keeps awards`, onlyEdu.includes(awardsMarker), true);
   check(`${name}: empty education alone keeps skills`, onlyEdu.includes(skillsMarker), true);
+  if (hasEarlierExperience) {
+    check(`${name}: empty education alone keeps earlier-experience`, onlyEdu.includes(earlierExperienceMarker), true);
+
+    // Earlier-experience empty on its own: projects/education (both populated) survive, only it goes.
+    const onlyEarlier = stripEmptySections(template, { ...FULL, earlier_experience: [] }, format);
+    check(`${name}: empty earlier-experience alone keeps projects`, onlyEarlier.includes(projectsMarker), true);
+    check(`${name}: empty earlier-experience alone keeps education`, onlyEarlier.includes(educationMarker), true);
+    check(`${name}: empty earlier-experience alone drops earlier-experience`, onlyEarlier.includes(earlierExperienceMarker), false);
+    check(`${name}: empty earlier-experience alone keeps awards`, onlyEarlier.includes(awardsMarker), true);
+    check(`${name}: empty earlier-experience alone keeps skills`, onlyEarlier.includes(skillsMarker), true);
+  }
   if (hasCompetencies) {
     check(`${name}: empty education alone keeps competencies`, onlyEdu.includes(competenciesMarker), true);
   }

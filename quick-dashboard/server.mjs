@@ -72,10 +72,19 @@ function handleApi(req, res, path) {
   }
 
   if (req.method === 'POST' && path === '/api/status') {
-    return readBody(req, res, ({ selector, state, note, setNote }) => {
+    return readBody(req, res, ({ selector, state, note, setNote, selectorKind }) => {
       if (!selector || !state) return json(res, 400, { error: 'selector and state are required' });
       if (note != null && setNote != null) return json(res, 400, { error: 'note and setNote are mutually exclusive' });
-      const args = ['set-status.mjs', String(selector), String(state)];
+      // The Tracker + Status table's inline row controls always know they mean
+      // a tracker row (the row object they're editing), never a report ID —
+      // so they pass selectorKind: 'row' to select via `--row N` and skip
+      // set-status.mjs's report-link mismatch guard, which exists for the
+      // genuinely ambiguous case (a bare number typed into the manual Status
+      // Action form below, which does NOT set this flag).
+      const useRowFlag = selectorKind === 'row' && /^\d+$/.test(String(selector));
+      const args = useRowFlag
+        ? ['set-status.mjs', '--row', String(selector), String(state)]
+        : ['set-status.mjs', String(selector), String(state)];
       // setNote replaces the Notes cell verbatim (freeform row edit); note
       // appends with the existing "; "-separated, idempotent semantics.
       if (setNote != null) args.push('--set-note', String(setNote));
@@ -97,6 +106,23 @@ function handleApi(req, res, path) {
     return readBody(req, res, ({ item, action, rejectRule, resumeNote }) => {
       if (!item) return json(res, 400, { error: 'item is required' });
       const result = movePipelineItemToProcessed(item, String(action || 'processed'), rejectRule || null, resumeNote ? String(resumeNote) : '');
+      return json(res, result.ok ? 200 : 500, result);
+    });
+  }
+
+  if (req.method === 'POST' && path === '/api/pipeline/enrich') {
+    return readBody(req, res, ({ url, reportFilename }) => {
+      if (!url || typeof url !== 'string') return json(res, 400, { error: 'url is required' });
+      if (!reportFilename || typeof reportFilename !== 'string') return json(res, 400, { error: 'reportFilename is required' });
+      const result = enrichPipelineItemFromReport(url.trim(), reportFilename.trim());
+      return json(res, result.ok ? 200 : 500, result);
+    });
+  }
+
+  if (req.method === 'POST' && path === '/api/pipeline/mark-dead') {
+    return readBody(req, res, ({ url, reason }) => {
+      if (!url || typeof url !== 'string') return json(res, 400, { error: 'url is required' });
+      const result = markPipelineItemDead(url.trim(), String(reason || ''));
       return json(res, result.ok ? 200 : 500, result);
     });
   }
@@ -565,10 +591,19 @@ function escapeRegExp(value) {
 function parsePipelineItem(line) {
   const clean = line.replace(/^- \[[^\]]+\]\s*/, '');
   const parts = clean.split('|').map((p) => p.trim());
-  const originalUrl = parts[0] || '';
+  // Labeled segments (dead:/posted:/trust:/note:/rank:) are identified by
+  // their own prefix, not by pipe position — a row can carry anywhere from 1
+  // to 5 positional fields before the first one starts, so a fixed index
+  // (parts[3] for location, parts.slice(4) for "everything after") silently
+  // captures a labeled segment as if it were positional whenever fewer than
+  // the maximum positional fields are present. splitPipelineFields() is the
+  // one place that knows where positional ends and labeled begins; use it
+  // here too instead of re-deriving the same split by raw index.
+  const { positional, labeled, unknown } = splitPipelineFields(parts);
+  const originalUrl = positional[0] || '';
   const url = normalizeLinkedInJobUrl(unwrapTrackingUrl(originalUrl) || originalUrl);
-  const initialCompany = parts[1] || '';
-  const initialRole = parts[2] || '';
+  const initialCompany = positional[1] || '';
+  const initialRole = positional[2] || '';
   const host = hostFromUrl(url);
   const derivedRole = deriveRoleFromUrl(url, host);
   const derivedCompany = deriveCompanyFromUrl(url, host);
@@ -588,17 +623,35 @@ function parsePipelineItem(line) {
     originalUrl,
     company: resolvedCompany,
     role: resolvedRole,
-    location: parts[3] || '',
-    posted: parts.find((p) => p.toLowerCase().startsWith('posted:')) || '',
-    extra: parts.slice(4),
+    location: positional[3] || '',
+    posted: labeled.posted || '',
+    extra: [...PIPELINE_LABEL_ORDER.map((k) => labeled[k]).filter(Boolean), ...unknown],
   };
-  parsed.note = (parsed.extra || []).find((p) => p.toLowerCase().startsWith('note:')) || '';
+  parsed.note = labeled.note || '';
   parsed.source = normalizePipelineSource(sourceFromNote(parsed.note) || sourceFromUrl(parsed.url), parsed);
   parsed.sourceHost = hostFromUrl(parsed.url);
   parsed.employmentType = inferEmploymentType(parsed);
   parsed.score = scoreFromReportUrl(url);
   parsed.reportFilename = reportFilenameFromUrl(url);
+  const trust = parseTrustSegment(labeled.trust || '');
+  parsed.trustScore = trust.score;
+  parsed.trustFlags = trust.flags;
+  parsed.deadReason = labeled.dead ? labeled.dead.replace(/^dead:\s*/i, '').trim() : '';
   return parsed;
+}
+
+// `| trust: {score}` or `| trust: {score} {flag,flag}` — the scanner's
+// legitimacy signal (modes/pipeline.md), written only when a posting scored
+// below 100. Score-only is valid (no flags recorded); absent segment is
+// { score: null, flags: [] } so callers can tell "clean" from "never scored".
+function parseTrustSegment(segment) {
+  const text = String(segment || '').replace(/^trust:\s*/i, '').trim();
+  if (!text) return { score: null, flags: [] };
+  const m = text.match(/^(\d{1,3})(?:\s+(.+))?$/);
+  if (!m) return { score: null, flags: [] };
+  const score = Number(m[1]);
+  const flags = m[2] ? m[2].split(',').map((f) => f.trim()).filter(Boolean) : [];
+  return { score: Number.isFinite(score) ? score : null, flags };
 }
 
 function unwrapTrackingUrl(inputUrl, depth = 0) {
@@ -866,7 +919,7 @@ function pathFromUrl(url) {
 function looksLikeFullTimeByHost(host, path) {
   if (!host) return false;
 
-  if (host.endsWith('linkedin.com') && path.startsWith('/comm/jobs/view/')) return true;
+  if (host.endsWith('linkedin.com') && (path.startsWith('/jobs/view/') || path.startsWith('/comm/jobs/view/'))) return true;
   if (host.endsWith('glassdoor.com') && (path.startsWith('/partner/joblisting.htm') || path.startsWith('/job/'))) return true;
 
   const fullTimeHosts = [
@@ -916,6 +969,15 @@ function readTracker() {
   const file = pathCandidates.find((p) => existsSync(p));
   if (!file) return { found: false, rows: [], summary: {} };
 
+  // Report metadata (filename + legitimacy tier), keyed by normalized report
+  // number, so each tracker row can link straight to its report and surface
+  // its Block G legitimacy flag without re-reading every report file itself.
+  const reportMetaByNum = new Map();
+  for (const r of listReports()) {
+    if (!r.num) continue;
+    reportMetaByNum.set(normReportNum(r.num), r);
+  }
+
   const lastUpdatedByNum = readLastUpdatedByNum(file);
   const lines = readFileSync(file, 'utf8').split(/\r?\n/);
   const rows = [];
@@ -928,6 +990,8 @@ function readTracker() {
     if (cols.length < 9) continue;
     if (cols[0] === '#' || cols[0].startsWith('---')) continue;
 
+    const meta = /^\d+$/.test(cols[0]) ? reportMetaByNum.get(normReportNum(cols[0])) : null;
+
     rows.push({
       num: cols[0],
       date: cols[1],
@@ -939,6 +1003,9 @@ function readTracker() {
       report: cols[7],
       notes: cols[8],
       lastUpdated: lastUpdatedByNum[cols[0]] || cols[1],
+      reportFilename: meta?.filename || '',
+      legitimacy: meta?.legitimacy || '',
+      postingUrl: meta?.postingUrl || '',
     });
   }
 
@@ -954,6 +1021,154 @@ function readStates() {
   const file = resolve(root, 'templates', 'states.yml');
   const doc = yaml.load(readFileSync(file, 'utf8'));
   return (doc?.states || []).map((s) => s.label);
+}
+
+// Backfills a pending row's Company/Role (and, when the report recorded a
+// cleaner one, its URL) from a report the dashboard's own Evaluate button just
+// wrote. The row stays pending — evaluating isn't deciding — but "(no company)
+// / Job lead #id" is a placeholder for a lead nobody has looked at yet, and by
+// the time this runs the evaluator HAS looked at it and knows the real answer.
+// Without this, a blank-company row stays blank forever: the pending list
+// never re-derives it, since parsePipelineItem's own report-URL fallback
+// (companyFromReportUrl) only fires for rows whose stored URL still matches
+// the report's — which silently breaks the moment the evaluator records a
+// different (but equally valid, e.g. redirect-resolved) URL for the same
+// posting. Writing the report's own fields back in makes the row consistent
+// with itself instead of depending on that URL match holding forever.
+// modes/pipeline.md's labeled-segment convention: order-independent by pipe
+// position (identified by their own `{label}:` prefix), but rendered in a
+// fixed order — dead: -> posted: -> trust: -> note: -> rank: — when more
+// than one is present. `dead:` is dashboard-only for now (the dashboard's
+// Evaluate button is the only writer), placed first since a dead posting
+// outranks every other signal.
+const PIPELINE_LABEL_ORDER = ['dead', 'posted', 'trust', 'note', 'rank'];
+const PIPELINE_LABEL_RE = /^(dead|posted|trust|note|rank):/i;
+
+// Splits a pending/processed line's already-pipe-split fields into the
+// positional prefix (url/company/role/location/compensation — however many
+// of those are actually present) and the trailing labeled segments, so a
+// rewrite can update one without disturbing the others or their order. Once
+// a labeled segment is seen, everything after it is trailing (labeled or, in
+// a malformed line, preserved verbatim in `unknown` rather than dropped).
+function splitPipelineFields(parts) {
+  const positional = [];
+  const labeled = {};
+  const unknown = [];
+  let sawLabeled = false;
+  for (const part of parts) {
+    const m = part.match(PIPELINE_LABEL_RE);
+    if (m) {
+      sawLabeled = true;
+      labeled[m[1].toLowerCase()] = part;
+    } else if (!sawLabeled) {
+      positional.push(part);
+    } else {
+      unknown.push(part);
+    }
+  }
+  return { positional, labeled, unknown };
+}
+
+function joinPipelineFields(positional, labeled, unknown) {
+  const orderedLabeled = PIPELINE_LABEL_ORDER.map((k) => labeled[k]).filter(Boolean);
+  return [...positional, ...orderedLabeled, ...unknown].join(' | ');
+}
+
+// Flags a pending row whose posting the dashboard's Evaluate button found
+// dead (404/expired/redirected to a generic page). modes/oferta.md's own
+// Liveness gate already stops the evaluator before Block A on a dead link —
+// but that outcome previously left no durable trace anywhere: the row just
+// kept showing a plain "Evaluate" button next time, and the only record was
+// the Evaluate tab's own scrollback for that one run. Row stays pending
+// (never auto-moved to Processed) so it stays visible — the user decides
+// whether to Reject it, leave it in case the posting comes back, or retry.
+function markPipelineItemDead(originalUrl, reason) {
+  const targetUrl = String(originalUrl || '').trim();
+  if (!targetUrl) return { ok: false, error: 'url is required' };
+  const cleanReason = String(reason || '').trim() || 'link appears dead';
+
+  const file = resolve(root, 'data', 'pipeline.md');
+  if (!existsSync(file)) return { ok: false, error: 'pipeline.md not found' };
+
+  const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+  let matchedIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t.startsWith('- [ ]')) continue; // only ever touch a still-pending row
+    const parsed = parsePipelineItem(t);
+    if (parsed.url === targetUrl || parsed.originalUrl === targetUrl) { matchedIndex = i; break; }
+  }
+  if (matchedIndex === -1) return { ok: false, error: 'no matching pending row found for this URL (already processed, or moved?)' };
+
+  const original = lines[matchedIndex];
+  const prefixMatch = original.match(/^(\s*- \[ \]\s*)/);
+  const prefix = prefixMatch ? prefixMatch[1] : '- [ ] ';
+  const rawParts = original.slice(prefix.length).split('|').map((p) => p.trim());
+  const { positional, labeled, unknown } = splitPipelineFields(rawParts);
+  labeled.dead = `dead: ${cleanReason}`;
+
+  lines[matchedIndex] = `${prefix}${joinPipelineFields(positional, labeled, unknown)}`;
+  writeFileSync(file, lines.join('\n'), 'utf8');
+  return { ok: true, url: positional[0] || targetUrl, reason: cleanReason };
+}
+
+function enrichPipelineItemFromReport(originalUrl, reportFilename) {
+  const targetUrl = String(originalUrl || '').trim();
+  if (!targetUrl) return { ok: false, error: 'url is required' };
+
+  const meta = readReportMeta(reportFilename);
+  if (!meta) return { ok: false, error: `report not found: ${reportFilename}` };
+  if (!meta.company || !meta.role) return { ok: false, error: 'report is missing company/role — nothing to backfill' };
+
+  const file = resolve(root, 'data', 'pipeline.md');
+  if (!existsSync(file)) return { ok: false, error: 'pipeline.md not found' };
+
+  const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+  let matchedIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t.startsWith('- [ ]')) continue; // only ever touch a still-pending row
+    const parsed = parsePipelineItem(t);
+    if (parsed.url === targetUrl || parsed.originalUrl === targetUrl) { matchedIndex = i; break; }
+  }
+  if (matchedIndex === -1) return { ok: false, error: 'no matching pending row found for this URL (already processed, or moved?)' };
+
+  const original = lines[matchedIndex];
+  const prefixMatch = original.match(/^(\s*- \[ \]\s*)/);
+  const prefix = prefixMatch ? prefixMatch[1] : '- [ ] ';
+  const rawParts = original.slice(prefix.length).split('|').map((p) => p.trim());
+  const { positional, labeled, unknown } = splitPipelineFields(rawParts);
+
+  while (positional.length < 3) positional.push('');
+  positional[1] = meta.company;
+  positional[2] = meta.role;
+  // Prefer the report's own recorded URL when it has one — it's what future
+  // score/report lookups for this row will be keyed against, so aligning them
+  // now is what makes the row's score chip and Open link resolve correctly.
+  if (meta.postingUrl) positional[0] = meta.postingUrl;
+  // location is positional (4th column); posted is a labeled segment. Both
+  // only overwrite when the report actually captured them — never blank out
+  // an existing value with an absence, and never fabricate one (batch/
+  // batch-prompt.md's Machine Summary schema already refuses to invent
+  // either field, so null here means "genuinely unknown," not "empty string").
+  if (meta.location) {
+    while (positional.length < 4) positional.push('');
+    positional[3] = meta.location;
+  }
+  if (meta.postedDate) labeled.posted = `posted: ${meta.postedDate}`;
+
+  lines[matchedIndex] = `${prefix}${joinPipelineFields(positional, labeled, unknown)}`;
+  writeFileSync(file, lines.join('\n'), 'utf8');
+  return {
+    ok: true,
+    company: meta.company,
+    role: meta.role,
+    url: positional[0],
+    location: meta.location || '',
+    postedDate: meta.postedDate || '',
+    reportFilename: meta.filename,
+    score: meta.score,
+  };
 }
 
 function movePipelineItemToProcessed(itemTarget, action = 'processed', rejectRuleInput = null, resumeNote = '') {
@@ -1524,6 +1739,54 @@ function readPdfIndexMap() {
   }
 }
 
+// Peeks a single report file's header for the fields every consumer needs
+// (score/company/role/legitimacy/URL). Shared by listReports() (bulk listing)
+// and readReportMeta() (single-file lookup by filename, used to enrich a
+// pending pipeline row right after the dashboard's own Evaluate run writes it).
+function peekReportMeta(dir, filename) {
+  const m = filename.match(/^(\d+)-(.+)-(\d{4}-\d{2}-\d{2})\.md$/);
+  const num = m ? m[1] : '';
+  const slug = m ? m[2] : filename.replace('.md', '');
+  const date = m ? m[3] : '';
+  let score = '';
+  let company = slug;
+  let role = '';
+  let legitimacy = '';
+  let postingUrl = '';
+  let location = '';
+  let postedDate = '';
+  try {
+    const content = readFileSync(resolve(dir, filename), 'utf8');
+    const lines = content.split('\n').slice(0, 30);
+    const scoreLine = lines.find((l) => l.startsWith('**Score:**'));
+    const companyLine = lines.find((l) => l.startsWith('# Evaluation:'));
+    const legitimacyLine = lines.find((l) => l.startsWith('**Legitimacy:**'));
+    const urlLine = lines.find((l) => l.startsWith('**URL:**'));
+    if (scoreLine) score = scoreLine.replace('**Score:**', '').trim();
+    if (companyLine) {
+      const parts = companyLine.replace('# Evaluation:', '').trim().split('—');
+      company = (parts[0] || '').trim();
+      role = (parts[1] || '').trim();
+    }
+    if (legitimacyLine) legitimacy = legitimacyLine.replace('**Legitimacy:**', '').trim();
+    if (urlLine) postingUrl = urlLine.replace('**URL:**', '').trim();
+
+    // location/posted_date live in the ## Machine Summary YAML fence, not a
+    // **Header:** line — parse it properly rather than line-matching, since
+    // both fields (batch/batch-prompt.md, the schema's source of truth) are
+    // real YAML values (a quoted string or `null`), not fixed-prefix text.
+    const fenceMatch = content.match(/## Machine Summary\s*\n+```ya?ml\n([\s\S]*?)\n```/);
+    if (fenceMatch) {
+      try {
+        const doc = yaml.load(fenceMatch[1]) || {};
+        if (doc.location) location = String(doc.location).trim();
+        if (doc.posted_date) postedDate = String(doc.posted_date).trim();
+      } catch { /* malformed YAML in an older/hand-edited report — leave both blank */ }
+    }
+  } catch { /* ignore */ }
+  return { filename, num, slug, date, score, company, role, legitimacy, postingUrl, location, postedDate };
+}
+
 function listReports() {
   const dir = resolve(root, 'reports');
   if (!existsSync(dir)) return [];
@@ -1532,31 +1795,23 @@ function listReports() {
     .filter((f) => f.endsWith('.md'))
     .sort((a, b) => b.localeCompare(a))
     .map((filename) => {
-      // filename: 042-company-slug-YYYY-MM-DD.md
-      const m = filename.match(/^(\d+)-(.+)-(\d{4}-\d{2}-\d{2})\.md$/);
-      const num = m ? m[1] : '';
-      const slug = m ? m[2] : filename.replace('.md', '');
-      const date = m ? m[3] : '';
-      // peek at first 30 lines for score + company
-      let score = '';
-      let company = slug;
-      let role = '';
-      try {
-        const lines = readFileSync(resolve(dir, filename), 'utf8').split('\n').slice(0, 30);
-        const scoreLine = lines.find((l) => l.startsWith('**Score:**'));
-        const companyLine = lines.find((l) => l.startsWith('# Evaluation:'));
-        const roleLine = lines.find((l) => l.startsWith('# Evaluation:'));
-        if (scoreLine) score = scoreLine.replace('**Score:**', '').trim();
-        if (companyLine) {
-          const parts = companyLine.replace('# Evaluation:', '').trim().split('—');
-          company = (parts[0] || '').trim();
-          role = (parts[1] || '').trim();
-        }
-      } catch { /* ignore */ }
-      const pdfPath = num ? pdfIndex.get(normReportNum(num)) || '' : '';
+      const meta = peekReportMeta(dir, filename);
+      const pdfPath = meta.num ? pdfIndex.get(normReportNum(meta.num)) || '' : '';
       const pdfFilename = pdfPath ? basename(pdfPath) : '';
-      return { filename, num, slug, date, score, company, role, pdfFilename };
+      return { ...meta, pdfFilename };
     });
+}
+
+// Single-file lookup by filename — used right after a dashboard-triggered
+// Evaluate run to read back the company/role/URL it just wrote, without
+// listing the whole reports/ directory.
+function readReportMeta(filename) {
+  const safeName = String(filename || '').trim();
+  if (!safeName || safeName.includes('..') || safeName.includes('/')) return null;
+  const dir = resolve(root, 'reports');
+  const file = resolve(dir, safeName);
+  if (!existsSync(file) || !file.startsWith(dir)) return null;
+  return peekReportMeta(dir, safeName);
 }
 
 function buildEvalPrompt(url, today) {
@@ -1572,17 +1827,24 @@ function buildEvalPrompt(url, today) {
 
    Fallback only: if the command errors (exit 1, e.g. bot-walled) or is missing, use WebFetch instead and mark the report header "Verification: unconfirmed (batch mode)".
 
+   **If the Liveness gate finds the posting closed/dead** (404/410, an expired/closed message, or only nav/footer content with no JD): stop here per modes/oferta.md — do NOT proceed to Block A, do NOT write a report, do NOT touch batch/tracker-additions/ or the tracker. Output ONLY this final line, nothing else, nothing before or after it, then stop:
+   DEAD_LINK: {short reason, e.g. "404 not found", "posting expired", "redirected to generic careers page"}
+   The dashboard uses this exact line to flag the pending row as dead instead of guessing from your prose — get the prefix exactly right.
+
 2. Persist the result CANONICALLY so the web and the CLI share ONE source of truth:
    a. Reserve a report number: run \`node reserve-report-num.mjs\` — its stdout is a 3-digit number (e.g. 035).
-   b. Write the full report to reports/{num}-{company-slug}-${today}.md  (company-slug = company lowercased, non-alphanumerics → hyphens).
+   b. Write the full report to reports/{num}-{company-slug}-${today}.md  (company-slug = company lowercased, non-alphanumerics → hyphens). In the report header, set \`**URL:**\` to EXACTLY the "Posting URL" given at the end of this prompt, verbatim — never a redirected/canonicalized URL browser-extract.mjs happens to return, even if it differs. The dashboard that launched this run matches its pending-list row back to this report by that exact string, so substituting a different (even if equally valid) URL breaks that match silently.
    c. Append ONE row of 9 TAB-separated columns to batch/tracker-additions/{num}-{company-slug}.tsv, in THIS exact order (real \\t tabs, status BEFORE score):
       {num}\\t${today}\\t{Company}\\t{Role}\\t{CanonicalStatus e.g. Evaluated}\\t{score}/5\\t❌\\t[{num}](reports/{num}-{company-slug}-${today}.md)\\t{one-line note}
    d. Merge into the tracker: run \`node merge-tracker.mjs\` (it dedupes by company+role+report-num, validates the status, and writes data/applications.md — NEVER edit applications.md by hand).
 
 3. NEVER submit an application, fill no forms, contact no one. This is evaluation + persistence ONLY.${mem}
 
-After everything above is written and merged, output EXACTLY one final line, nothing after it:
+After everything above is written and merged, output EXACTLY these two final lines, in this order, nothing after them:
+REPORT: {num}-{company-slug}-${today}.md
 VERDICT: {score}/5 — {reason in 12 words or fewer}
+
+The REPORT line is how the dashboard finds what you just wrote — get the filename exactly right (same {num} and {company-slug} you actually used in step 2b).
 
 Posting URL: ${url}`;
 }

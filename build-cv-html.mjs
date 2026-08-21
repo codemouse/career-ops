@@ -53,6 +53,7 @@ const DEFAULT_SECTION_TITLES = {
   competencies: 'Core Competencies',
   experience: 'Work Experience',
   projects: 'Projects',
+  earlier_experience: 'Earlier Experience',
   education: 'Education',
   certifications: 'Certifications',
   awards: 'Awards & Honors',
@@ -300,7 +301,7 @@ function loadSectionPartials(templatePath) {
   if (!existsSync(sectionsDir)) return partials;
 
   const sectionNames = [
-    'competencies', 'experience', 'projects', 'education', 'certifications', 'awards', 'skills',
+    'competencies', 'experience', 'projects', 'earlier_experience', 'education', 'certifications', 'awards', 'skills',
   ];
   for (const name of sectionNames) {
     const partialPath = join(sectionsDir, `${name}.html`);
@@ -373,6 +374,41 @@ ${bullets}
       ROLE: escapeHtml(e.role || ''),
       LOCATION: escapeHtml(e.location || ''),
       BULLETS: bullets,
+    }, blockValues);
+  }).join('\n  ');
+}
+
+// Condensed pre-cutoff career history: one line per role, no bullets — the
+// designated home for cv.md's own "## Previous Experience" section, kept
+// separate from Work Experience so it has a stable place in every tailored
+// CV instead of depending on an ad hoc per-run judgment call about whether to
+// fold it into the main experience array (or drop it for space).
+function buildEarlierExperience(entries, partial) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  if (!partial) {
+    return entries.filter(Boolean).map(e => {
+      const roleCompany = [e.role, e.company].filter(Boolean).join(', ');
+      const metaText = [e.location, e.dates ? `(${e.dates})` : ''].filter(Boolean).join(' ');
+      const meta = metaText ? `<span class="earlier-meta">${escapeHtml(metaText)}</span>` : '';
+      const desc = e.description ? `\n    <div class="earlier-desc">${escapeHtml(e.description)}</div>` : '';
+      return `<div class="earlier-item">
+    <span class="earlier-role">${escapeHtml(roleCompany)}</span>${meta}${desc}
+  </div>`;
+    }).join('\n  ');
+  }
+
+  const { entryTemplate, blocks } = partial;
+  return entries.filter(Boolean).map(e => {
+    const roleCompany = [e.role, e.company].filter(Boolean).join(', ');
+    const metaText = [e.location, e.dates ? `(${e.dates})` : ''].filter(Boolean).join(' ');
+    const blockValues = new Map([
+      ['META_BLOCK', { value: escapeHtml(metaText), present: Boolean(metaText) }],
+      ['DESC_BLOCK', { value: escapeHtml(e.description || ''), present: Boolean(e.description) }],
+    ]);
+    return fillEntry(entryTemplate, blocks, {
+      ROLE_COMPANY: escapeHtml(roleCompany),
+      META: escapeHtml(metaText),
+      DESCRIPTION: escapeHtml(e.description || ''),
     }, blockValues);
   }).join('\n  ');
 }
@@ -600,6 +636,8 @@ function renderReport(payload, partials) {
     EXPERIENCE: buildExperience(payload.experience, partials.get('experience')),
     SECTION_PROJECTS: escapeHtml(sectionTitles.projects),
     PROJECTS: buildProjects(payload.projects, partials.get('projects')),
+    SECTION_EARLIER_EXPERIENCE: escapeHtml(sectionTitles.earlier_experience),
+    EARLIER_EXPERIENCE: buildEarlierExperience(payload.earlier_experience, partials.get('earlier_experience')),
     SECTION_EDUCATION: escapeHtml(sectionTitles.education),
     EDUCATION: buildEducation(payload.education, partials.get('education')),
     SECTION_CERTIFICATIONS: escapeHtml(sectionTitles.certifications),
@@ -663,6 +701,7 @@ async function writeAndReport(html, absOutput, payload, extra = {}) {
       competencies: (payload.competencies || []).length,
       experienceEntries: (payload.experience || []).length,
       projectEntries: (payload.projects || []).length,
+      earlierExperienceEntries: (payload.earlier_experience || []).length,
       educationEntries: (payload.education || []).length,
       certificationEntries: (payload.certifications || []).length,
       awardEntries: (payload.awards || []).length,
@@ -776,6 +815,13 @@ async function runSelfTest() {
       tech: 'Python, FastAPI, Docker',
       description: 'Built a REST API with automated test coverage exceeding 90%.',
     }],
+    earlier_experience: [{
+      role: 'Software Engineer',
+      company: 'Old Corp',
+      location: 'City, State',
+      dates: '2018 - 2020',
+      description: 'Built early-stage backend services.',
+    }],
     education: [{
       title: 'Bachelor of Science in Computer Science',
       org: 'Test University',
@@ -877,6 +923,21 @@ async function runSelfTest() {
   }
   if (!html.includes('class="award-item"')) {
     console.error('Self-test failed: awards section is missing .award-item class');
+    process.exit(1);
+  }
+  if (!html.includes('class="earlier-item"')) {
+    console.error('Self-test failed: earlier experience section is missing .earlier-item class');
+    process.exit(1);
+  }
+  if (!html.includes('Old Corp')) {
+    console.error('Self-test failed: earlier experience entry fields not found in output');
+    process.exit(1);
+  }
+
+  // Guard that earlier_experience disappears entirely (no bare header) when absent.
+  const noEarlierHtml = renderHtml(template, { ...sample, earlier_experience: [] }, TEMPLATE_PATH);
+  if (noEarlierHtml.includes('class="earlier-item"') || noEarlierHtml.includes('Earlier Experience')) {
+    console.error('Self-test failed: earlier experience section left a bare header when empty');
     process.exit(1);
   }
 

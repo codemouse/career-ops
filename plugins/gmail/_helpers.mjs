@@ -141,11 +141,13 @@ function canonicalJobUrlDepth(url, depth) {
       return null;
     }
 
-    // LinkedIn: keep only direct job view links.
+    // LinkedIn: keep only direct job view links. Email alerts wrap the real
+    // posting in a /comm/ click-tracking prefix that forces a login redirect;
+    // the plain /jobs/view/{id}/ page (same id) is publicly viewable, so strip it.
     if (host === 'linkedin.com' || host === 'www.linkedin.com') {
-      const m = path.match(/^\/comm\/jobs\/view\/(\d+)\/?$/i);
+      const m = path.match(/^\/(?:comm\/)?jobs\/view\/(\d+)\/?$/i);
       if (!m) return null;
-      return `https://www.linkedin.com/comm/jobs/view/${m[1]}/`;
+      return `https://www.linkedin.com/jobs/view/${m[1]}/`;
     }
 
     // FractionalJobs: keep only actual job pages.

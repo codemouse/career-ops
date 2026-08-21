@@ -77,9 +77,18 @@ read as having empty values for the missing trailing columns.
 
 Beyond the positional cells, rows may carry optional **labeled** segments —
 `| {label}: {value}` — that ride on any row shape (bare URL, 3-, 4-, or 5-column),
-because the `{label}:` prefix identifies them regardless of column position. Three
+because the `{label}:` prefix identifies them regardless of column position. Five
 are defined:
 
+- `| dead: {reason}` — written only by the quick-dashboard's Evaluate button, when
+  its liveness check (modes/oferta.md's Liveness gate) finds the posting closed
+  (404/410, an expired/closed message, or a redirect to a generic careers page)
+  and stops before Block A. The row stays pending (never auto-moved to Processed)
+  so it stays visible instead of silently vanishing — the flag is the point. A
+  short human-readable reason, e.g. `dead: 404 not found`. The CLI's own liveness
+  paths (the `pipeline` mode sweep, `auto-pipeline` Step 0.5) resolve a dead
+  posting a different way — moving the entry straight to Processed — so this
+  segment is currently dashboard-only; it never appears from a CLI run.
 - `| posted: {YYYY-MM-DD}` — the posting date, when the provider's API exposed one
   (`offer.postedAt`). The scanner writes it so freshness is visible at triage time
   without re-fetching the ATS. Rows from providers with no posting date simply omit
@@ -107,8 +116,10 @@ are defined:
   row can go unranked because the CLI call failed, returned malformed JSON, or
   gave no usable reason — all of which still spent tokens.)
 
-When more than one is present the order is `posted:` → `trust:` → `note:` →
-`rank:`. Treat them as hints when triaging; none changes how you process the URL.
+When more than one is present the order is `dead:` → `posted:` → `trust:` →
+`note:` → `rank:`. Treat them as hints when triaging; none changes how you
+process the URL — except `dead:`, which means don't spend an evaluation on it
+without checking the posting is actually back first.
 
 ## Intelligent JD detection from URL
 

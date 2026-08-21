@@ -39,6 +39,7 @@
     <section class="card" id="tabCard">
       <div class="tab-row tab-row-main">
         <div class="tab-buttons" role="tablist" aria-label="Dashboard Views">
+          <button id="startTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="startPanel">Start Here</button>
           <button id="pipelineTabBtn" class="tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="pipelinePanel">Pending Pipeline</button>
           <button id="manageTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="managePanel">Tracker + Status</button>
           <button id="analyticsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="analyticsPanel">Analytics</button>
@@ -52,7 +53,7 @@
         </div>
       </div>
 
-      <div id="pipelinePanel" class="tab-panel" role="tabpanel" aria-labelledby="pipelineTabBtn">
+      <div id="startPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="startTabBtn">
         <section class="card" id="startCard">
           <h2 class="section-title">CareerOps Start Here</h2>
           <div id="opsChecklist" class="chips"></div>
@@ -64,7 +65,9 @@
           </div>
           <pre id="opsOutput" class="log"></pre>
         </section>
+      </div>
 
+      <div id="pipelinePanel" class="tab-panel" role="tabpanel" aria-labelledby="pipelineTabBtn">
         <section class="card" id="pipelineCard">
           <h2 class="section-title">Pipeline Pending</h2>
           <div class="pipeline-toolbar">
@@ -124,9 +127,26 @@
             <button id="trackerViewAllBtn" class="tab-btn active" type="button" role="tab" aria-selected="true">All</button>
             <button id="trackerViewActiveBtn" class="tab-btn" type="button" role="tab" aria-selected="false">Active</button>
           </div>
+          <div class="pipeline-toolbar">
+            <label class="pipeline-search">
+              Search
+              <input id="trackerSearchInput" placeholder="Search company, role, notes" />
+            </label>
+            <label class="pipeline-filter">
+              Flags
+              <select id="trackerFlagsFilterSelect">
+                <option value="all">All</option>
+                <option value="High Confidence">High Confidence</option>
+                <option value="Proceed with Caution">Proceed with Caution</option>
+                <option value="Suspicious">Suspicious</option>
+                <option value="none">No flag</option>
+              </select>
+            </label>
+            <button id="trackerClearFiltersBtn" class="secondary" type="button">Clear All Filters</button>
+          </div>
           <div id="trackerSummary" class="chips"></div>
-          <div class="table-wrap">
-            <table id="trackerTable">
+          <div class="table-wrap pipeline-table-wrap">
+            <table id="trackerTable" class="pipeline-table">
               <thead>
                 <tr>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="num">#</button></th>
@@ -134,9 +154,11 @@
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="company">Company</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="role">Role</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="score">Score</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="legitimacy">Flags</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="status">Status</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="lastUpdated">Last Updated</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-tracker-sort-key="notes">Notes</button></th>
+                  <th scope="col" class="actions-col">Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>

@@ -307,6 +307,37 @@
     line-height: 1.5;
   }
 
+  /* === EARLIER EXPERIENCE === */
+  /* Condensed pre-cutoff career history: one compact block per role, no
+     bullets — denser than a .job entry since it's lower-priority than Work
+     Experience but still needs room for a one-line description. */
+  .earlier-item {
+    margin-bottom: 8px;
+  }
+
+  .earlier-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .earlier-role {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #333;
+  }
+
+  .earlier-meta {
+    font-size: 10px;
+    color: #777;
+    margin-left: 6px;
+  }
+
+  .earlier-desc {
+    font-size: 10px;
+    color: #666;
+    line-height: 1.4;
+    margin-top: 1px;
+  }
+
   /* === CERTIFICATIONS === */
   .cert-table {
     display: table;
@@ -657,6 +688,12 @@
   <div class="section">
     <div class="section-title">{{SECTION_PROJECTS}}</div>
     {{PROJECTS}}
+  </div>
+
+  <!-- EARLIER EXPERIENCE -->
+  <div class="section">
+    <div class="section-title">{{SECTION_EARLIER_EXPERIENCE}}</div>
+    {{EARLIER_EXPERIENCE}}
   </div>
 
   <!-- EDUCATION -->

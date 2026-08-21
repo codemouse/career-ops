@@ -21,7 +21,7 @@ const PENDING_HEADER_RE = /^##\s+(Pending|Pendientes)\s*$/i;
 const SECTION_HEADER_RE = /^##\s+/;
 const PENDING_ITEM_RE = /^- \[ \]\s+(.+)$/;
 const LINKEDIN_HOST_RE = /(^|\.)linkedin\.com$/i;
-const LINKEDIN_VIEW_RE = /^\/comm\/jobs\/view\/(\d+)\/?$/i;
+const LINKEDIN_VIEW_RE = /^\/(?:comm\/)?jobs\/view\/(\d+)\/?$/i;
 const GLASSDOOR_HOST_RE = /(^|\.)glassdoor\.com$/i;
 
 function splitFields(itemText) {
@@ -57,7 +57,9 @@ function canonicalLinkedInJobUrl(parsedUrl) {
   if (!isLinkedInHost(parsedUrl)) return null;
   const m = parsedUrl.pathname.match(LINKEDIN_VIEW_RE);
   if (!m) return null;
-  return `https://www.linkedin.com/comm/jobs/view/${m[1]}/`;
+  // /comm/ is a click-tracking prefix that forces a login redirect; the plain
+  // /jobs/view/{id}/ page (same id) is publicly viewable.
+  return `https://www.linkedin.com/jobs/view/${m[1]}/`;
 }
 
 function isKnownEmailNoise(parsedUrl) {

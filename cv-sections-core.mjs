@@ -1,18 +1,19 @@
 // Shared optional-section stripping for the CV builders (build-cv-html.mjs,
 // build-cv-latex.mjs).
 //
-// Core competencies, projects, education, certifications, awards, and skills
-// are the genuinely optional CV sections: a competency tag row is often
-// redundant with the summary and experience bullets that prove the same
-// claims, a candidate's projects are often already covered under Work
-// Experience, not every candidate has a degree, not every application carries
-// a certification worth listing, most candidates have no award to name, and
+// Core competencies, projects, earlier experience, education, certifications,
+// awards, and skills are the genuinely optional CV sections: a competency tag
+// row is often redundant with the summary and experience bullets that prove
+// the same claims, a candidate's projects are often already covered under
+// Work Experience, not every candidate has pre-cutoff roles worth a condensed
+// mention, not every candidate has a degree, not every application carries a
+// certification worth listing, most candidates have no award to name, and
 // plenty of candidates list no skills section at all. The templates wrap all
-// six unconditionally, so a payload with no entries renders a bare section
+// seven unconditionally, so a payload with no entries renders a bare section
 // header with nothing under it. The builders' buildCompetencies()/
-// buildProjects()/buildEducation()/buildCertifications()/buildAwards()/
-// buildSkills() correctly return '' — nothing removes the surrounding
-// wrapper, which is what this module does.
+// buildProjects()/buildEarlierExperience()/buildEducation()/
+// buildCertifications()/buildAwards()/buildSkills() correctly return '' —
+// nothing removes the surrounding wrapper, which is what this module does.
 //
 // Certifications has no marker in the LaTeX template (cv-template.tex has no
 // Certifications section at all), so PATTERNS.tex has no `certifications` key
@@ -84,6 +85,7 @@ const PATTERNS = {
   html: {
     competencies: new RegExp(String.raw`<!--\s+CORE COMPETENCIES\s+-->[\s\S]*?` + HTML_BOUNDARY),
     projects: new RegExp(String.raw`<!--\s+PROJECTS\s+-->[\s\S]*?` + HTML_BOUNDARY),
+    earlier_experience: new RegExp(String.raw`<!--\s+EARLIER EXPERIENCE\s+-->[\s\S]*?` + HTML_BOUNDARY),
     education: new RegExp(String.raw`<!--\s+EDUCATION\s+-->[\s\S]*?` + HTML_BOUNDARY),
     certifications: new RegExp(String.raw`<!--\s+CERTIFICATIONS\s+-->[\s\S]*?` + HTML_BOUNDARY),
     awards: new RegExp(String.raw`<!--\s+AWARDS\s+-->[\s\S]*?` + HTML_BOUNDARY),
@@ -97,7 +99,10 @@ const PATTERNS = {
   },
 };
 
-export const OPTIONAL_SECTIONS = ['competencies', 'projects', 'education', 'certifications', 'awards', 'skills'];
+// earlier_experience (#pdf-order-and-earlier-experience): condensed pre-cutoff
+// career history — cv.md's own "## Previous Experience" section, one line per
+// role, no bullets. html-only for now (no LaTeX marker), same as competencies.
+export const OPTIONAL_SECTIONS = ['competencies', 'projects', 'earlier_experience', 'education', 'certifications', 'awards', 'skills'];
 
 export function isEmptySection(payload, section) {
   const entries = payload?.[section];

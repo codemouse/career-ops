@@ -4,6 +4,9 @@ const trackerTable = document.getElementById('trackerTable');
 const trackerSummary = document.getElementById('trackerSummary');
 const trackerViewAllBtn = document.getElementById('trackerViewAllBtn');
 const trackerViewActiveBtn = document.getElementById('trackerViewActiveBtn');
+const trackerSearchInput = document.getElementById('trackerSearchInput');
+const trackerFlagsFilterSelect = document.getElementById('trackerFlagsFilterSelect');
+const trackerClearFiltersBtn = document.getElementById('trackerClearFiltersBtn');
 const pipelineSearchInput = document.getElementById('pipelineSearchInput');
 const pendingSummary = document.getElementById('pendingSummary');
 const hiddenJobsCount = document.getElementById('hiddenJobsCount');
@@ -15,6 +18,7 @@ const baselineRefreshBtn = document.getElementById('baselineRefreshBtn');
 const runVerifyPipelineBtn = document.getElementById('runVerifyPipelineBtn');
 const runVerifyPortalsBtn = document.getElementById('runVerifyPortalsBtn');
 const runStatsBtn = document.getElementById('runStatsBtn');
+const startTabBtn = document.getElementById('startTabBtn');
 const pipelineTabBtn = document.getElementById('pipelineTabBtn');
 const manageTabBtn = document.getElementById('manageTabBtn');
 const analyticsTabBtn = document.getElementById('analyticsTabBtn');
@@ -23,6 +27,7 @@ const evaluateTabBtn = document.getElementById('evaluateTabBtn');
 const reportsGeneratePdfBtn = document.getElementById('reportsGeneratePdfBtn');
 const reportsDownloadResumeLink = document.getElementById('reportsDownloadResumeLink');
 const reportsToolbarMeta = document.getElementById('reportsToolbarMeta');
+const startPanel = document.getElementById('startPanel');
 const pipelinePanel = document.getElementById('pipelinePanel');
 const managePanel = document.getElementById('managePanel');
 const analyticsPanel = document.getElementById('analyticsPanel');
@@ -81,6 +86,8 @@ const trackerState = {
   sortDir: 'desc',
   statusFilter: 'all', // 'all' | 'active' | an exact status string from the tracker (e.g. 'Rejected')
   availableStates: [], // populated by loadStates(); canonical labels from templates/states.yml
+  query: '',
+  flagsFilter: 'all', // 'all' | 'none' | an exact legitimacy tier (e.g. 'Suspicious')
 };
 
 // Manually re-running an evaluation to Evaluated is a real process (oferta/
@@ -152,6 +159,7 @@ const pipelineFilters = {
 refreshBtn.addEventListener('click', loadAll);
 scanBtn.addEventListener('click', runScan);
 statusForm.addEventListener('submit', submitStatus);
+startTabBtn?.addEventListener('click', () => setActiveTab('start'));
 pipelineTabBtn?.addEventListener('click', () => setActiveTab('pipeline'));
 manageTabBtn?.addEventListener('click', () => setActiveTab('manage'));
 analyticsTabBtn?.addEventListener('click', () => setActiveTab('analytics'));
@@ -182,6 +190,21 @@ showPriorAppliedToggle?.addEventListener('change', (ev) => {
   pipelineState.showPriorApplied = Boolean(ev.target.checked);
   renderPipeline();
 });
+trackerSearchInput?.addEventListener('input', (ev) => {
+  trackerState.query = String(ev.target.value || '').trim().toLowerCase();
+  renderTrackerTable();
+});
+trackerFlagsFilterSelect?.addEventListener('change', (ev) => {
+  trackerState.flagsFilter = String(ev.target.value || 'all');
+  renderTrackerTable();
+});
+trackerClearFiltersBtn?.addEventListener('click', () => {
+  trackerState.query = '';
+  trackerState.flagsFilter = 'all';
+  if (trackerSearchInput) trackerSearchInput.value = '';
+  if (trackerFlagsFilterSelect) trackerFlagsFilterSelect.value = 'all';
+  renderTrackerTable();
+});
 clearAllFiltersBtn?.addEventListener('click', () => {  pipelineFilters.source = 'all';
   pipelineFilters.type = 'all';
   pipelineState.query = '';
@@ -208,6 +231,22 @@ pendingTableBody?.addEventListener('click', (ev) => {
   renderEvaluationViewer();
 });
 pendingTableBody?.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return;
+  const reportFilename = target.dataset.reportFilename || target.closest('[data-report-filename]')?.dataset.reportFilename;
+  if (!reportFilename) return;
+  ev.preventDefault();
+  openReportFromPipeline(reportFilename);
+});
+trackerBody?.addEventListener('click', (ev) => {
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return;
+  const reportFilename = target.dataset.reportFilename || target.closest('[data-report-filename]')?.dataset.reportFilename;
+  if (!reportFilename) return;
+  openReportFromPipeline(reportFilename);
+});
+trackerBody?.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Enter' && ev.key !== ' ') return;
   const target = ev.target;
   if (!(target instanceof HTMLElement)) return;
@@ -309,15 +348,16 @@ setActiveTab('pipeline');
 initWhimsy();
 
 function setActiveTab(tab) {
-  const tabs = ['pipeline', 'manage', 'analytics', 'reports', 'evaluate'];
-  const btns = { pipeline: pipelineTabBtn, manage: manageTabBtn, analytics: analyticsTabBtn, reports: reportsTabBtn, evaluate: evaluateTabBtn };
-  const panels = { pipeline: pipelinePanel, manage: managePanel, analytics: analyticsPanel, reports: reportsPanel, evaluate: evaluatePanel };
+  const tabs = ['start', 'pipeline', 'manage', 'analytics', 'reports', 'evaluate'];
+  const btns = { start: startTabBtn, pipeline: pipelineTabBtn, manage: manageTabBtn, analytics: analyticsTabBtn, reports: reportsTabBtn, evaluate: evaluateTabBtn };
+  const panels = { start: startPanel, pipeline: pipelinePanel, manage: managePanel, analytics: analyticsPanel, reports: reportsPanel, evaluate: evaluatePanel };
   for (const t of tabs) {
     const active = t === tab;
     btns[t]?.classList.toggle('active', active);
     btns[t]?.setAttribute('aria-selected', String(active));
     panels[t]?.classList.toggle('is-hidden', !active);
   }
+  document.body.classList.toggle('tab-start', tab === 'start');
   document.body.classList.toggle('tab-pipeline', tab === 'pipeline');
   document.body.classList.toggle('tab-manage', tab === 'manage');
   document.body.classList.toggle('tab-analytics', tab === 'analytics');
@@ -437,19 +477,34 @@ async function loadStates() {
 
 async function loadTracker() {
   const data = await api('/api/tracker');
-  const rows = data.rows || [];
-  window._trackerRows = rows;
+  window._trackerRows = data.rows || [];
+  window._trackerFound = Boolean(data.found);
+  window._trackerSummary = data.summary || {};
+  renderTrackerTable();
+}
+
+// Re-renders from the cached fetch (window._trackerRows) — no network call —
+// so search/flags-filter typing and status-chip clicks stay instant instead
+// of re-fetching the whole tracker on every keystroke.
+function renderTrackerTable() {
+  const rows = window._trackerRows || [];
   trackerBody.innerHTML = '';
   trackerSummary.innerHTML = '';
 
-  if (!data.found) {
+  if (!window._trackerFound) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="8">No tracker file found yet.</td>';
+    tr.innerHTML = '<td colspan="10">No tracker file found yet.</td>';
     trackerBody.appendChild(tr);
     return;
   }
 
-  Object.entries(data.summary || {}).forEach(([k, v]) => {
+  const viewRows = filterTrackerRows(matchesTrackerSearchAndFlags(rows), trackerState.statusFilter);
+  const sortedRows = sortTrackerRows(viewRows);
+
+  if (trackerState.query.trim() || trackerState.flagsFilter !== 'all') {
+    renderMetric(trackerSummary, `Showing: ${sortedRows.length} of ${rows.length}`);
+  }
+  Object.entries(window._trackerSummary || {}).forEach(([k, v]) => {
     renderChip(trackerSummary, `${k}: ${v}`, {
       clickable: true,
       active: trackerState.statusFilter === k,
@@ -457,34 +512,75 @@ async function loadTracker() {
     });
   });
 
-  const viewRows = filterTrackerRows(rows, trackerState.statusFilter);
-
-  const sortedRows = sortTrackerRows(viewRows);
   if (sortedRows.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="8">No matching applications.</td>';
+    tr.innerHTML = '<td colspan="10">No matching applications.</td>';
     trackerBody.appendChild(tr);
     updateTrackerSortIndicators();
     return;
   }
   for (const row of sortedRows) {
     const tr = document.createElement('tr');
+    const score = String(row.score || '').trim();
+    const scoreCell = row.reportFilename
+      ? `<span class="chip score-chip clickable ${scoreClass(score)}" role="button" tabindex="0" data-report-filename="${escapeAttr(row.reportFilename)}">${escapeHtml(score || '-')}</span>`
+      : (score ? escapeHtml(score) : '<span class="muted-cell">-</span>');
     tr.innerHTML = `
       <td>${escapeHtml(row.num)}</td>
       <td>${escapeHtml(row.date)}</td>
-      <td>${escapeHtml(row.company)}</td>
+      <td><div class="cell-title">${escapeHtml(row.company)}</div></td>
       <td>${escapeHtml(row.role)}</td>
-      <td>${escapeHtml(row.score)}</td>
+      <td class="score-cell">${scoreCell}</td>
+      <td>${renderTrackerFlagsCell(row)}</td>
       <td class="tracker-status-cell"></td>
       <td>${escapeHtml(row.lastUpdated || row.date)}</td>
       <td class="tracker-notes-cell"></td>
+      <td class="actions-cell"></td>
     `;
     tr.querySelector('.tracker-status-cell').appendChild(buildTrackerStatusControl(row));
     tr.querySelector('.tracker-notes-cell').appendChild(buildTrackerNotesControl(row));
+    tr.querySelector('.actions-cell').appendChild(buildTrackerActionsCell(row));
     trackerBody.appendChild(tr);
   }
 
   updateTrackerSortIndicators();
+}
+
+function legitimacyClass(tier) {
+  const t = String(tier || '').trim().toLowerCase();
+  if (t === 'suspicious') return 'legitimacy-suspicious';
+  if (t === 'proceed with caution') return 'legitimacy-caution';
+  if (t === 'high confidence') return 'legitimacy-confident';
+  return '';
+}
+
+function renderTrackerFlagsCell(row) {
+  const tier = String(row.legitimacy || '').trim();
+  if (!tier) return '<span class="muted-cell">-</span>';
+  return `<div class="flags-cell"><span class="chip legitimacy-chip ${legitimacyClass(tier)}">${escapeHtml(tier)}</span></div>`;
+}
+
+function buildTrackerActionsCell(row) {
+  const wrap = document.createElement('div');
+  wrap.className = 'row item-actions';
+  if (row.postingUrl) {
+    wrap.appendChild(makeOpenPostingLink({ url: row.postingUrl }, 'Open'));
+  }
+  if (row.reportFilename) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'action-link action-open tracker-view-report';
+    link.textContent = 'View Report';
+    link.dataset.reportFilename = row.reportFilename;
+    wrap.appendChild(link);
+  }
+  if (!row.postingUrl && !row.reportFilename) {
+    const span = document.createElement('span');
+    span.className = 'muted-cell';
+    span.textContent = 'No report';
+    wrap.appendChild(span);
+  }
+  return wrap;
 }
 
 // Tracker # is blank ("—") on backfilled/legacy rows with no linked report,
@@ -560,7 +656,7 @@ function buildTrackerStatusControl(row) {
     try {
       await api('/api/status', {
         method: 'POST',
-        body: JSON.stringify({ selector: trackerRowSelector(row), state: newState }),
+        body: JSON.stringify({ selector: trackerRowSelector(row), state: newState, selectorKind: 'row' }),
       });
       setTrackerFieldIndicator(indicator, 'Saved', 'ok');
       await loadTracker();
@@ -600,7 +696,7 @@ function buildTrackerNotesControl(row) {
     try {
       await api('/api/status', {
         method: 'POST',
-        body: JSON.stringify({ selector: trackerRowSelector(row), state: row.status, setNote: newValue }),
+        body: JSON.stringify({ selector: trackerRowSelector(row), state: row.status, setNote: newValue, selectorKind: 'row' }),
       });
       savedValue = newValue;
       row.notes = newValue;
@@ -615,6 +711,21 @@ function buildTrackerNotesControl(row) {
   wrap.appendChild(textarea);
   wrap.appendChild(indicator);
   return wrap;
+}
+
+// Search box + Flags dropdown, applied before the status filter/chips —
+// mirrors Pending Pipeline's search+source-filter pattern.
+function matchesTrackerSearchAndFlags(rows) {
+  const query = String(trackerState.query || '').trim().toLowerCase();
+  const flags = trackerState.flagsFilter || 'all';
+  return (rows || []).filter((row) => {
+    const tier = String(row.legitimacy || '').trim();
+    const flagsOk = flags === 'all' || (flags === 'none' ? !tier : tier === flags);
+    if (!flagsOk) return false;
+    if (!query) return true;
+    const haystack = `${row.num || ''} ${row.company || ''} ${row.role || ''} ${row.notes || ''} ${row.status || ''}`.toLowerCase();
+    return haystack.includes(query);
+  });
 }
 
 function filterTrackerRows(rows, filter) {
@@ -696,6 +807,12 @@ function trackerSortValue(row, key) {
       return String(row?.status || '').toLowerCase();
     case 'notes':
       return String(row?.notes || '').toLowerCase();
+    case 'legitimacy': {
+      // Most-concerning tier first so a sort click surfaces rows worth a second look.
+      const order = { suspicious: 0, 'proceed with caution': 1, 'high confidence': 2 };
+      const tier = String(row?.legitimacy || '').trim().toLowerCase();
+      return tier in order ? order[tier] : 3;
+    }
     default:
       return String(row?.date || '').toLowerCase();
   }
@@ -943,8 +1060,14 @@ function applyPipelineFilters(items, options = {}) {
       : '';
     const queryOk = !query || queryText.includes(query);
     const glassdoorBlocked = inferSource(item) === 'Glassdoor';
-    const hasCoreFields = Boolean(String(item.company || '').trim() && String(item.role || '').trim());
-    return sourceOk && typeOk && queryOk && !glassdoorBlocked && hasCoreFields;
+    // No hasCoreFields gate: a pending row always has a URL (that's what makes
+    // it a row), but company/role are frequently unresolved for a raw lead
+    // (e.g. a LinkedIn "Job lead #id" stub never opened yet). Requiring both
+    // used to drop those rows from the table with zero indication — not
+    // filtered, just gone — which is worse than showing "(no company)" /
+    // "(no role)" via the same fallback renderStepOneGuidance/renderPipelineItem
+    // already use for exactly this case.
+    return sourceOk && typeOk && queryOk && !glassdoorBlocked;
   });
 }
 
@@ -1244,14 +1367,47 @@ function buildSubtitle(item, source) {
   return extras.join(' | ');
 }
 
+// Posting-age tiers match Block G's own convention (modes/_shared.md):
+// under 30d=good (no flag), 30-60d=mixed ("Aging"), 60d+=concerning ("Stale").
+function daysSincePosted(item) {
+  const raw = String(item?.posted || '').replace(/^posted:\s*/i, '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const posted = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(posted.getTime())) return null;
+  return Math.floor((Date.now() - posted.getTime()) / 86400000);
+}
+
 function renderFlagsCell(item, matchRule = null) {
   const flags = [];
+  // Evaluate found this dead (404/expired/redirected) — modes/oferta.md's
+  // Liveness gate stopped before Block A, so there's no score/report for
+  // this row; markPipelineItemDead wrote the `dead:` segment that surfaces
+  // here. Highest-priority flag — nothing else about the row matters until
+  // this is resolved.
+  if (item.deadReason) {
+    flags.push(`<span class="chip dead-link-chip" title="${escapeAttr(item.deadReason)}">Dead Link</span>`);
+  }
   const priorApplied = priorAppliedStatusFor(item.company);
   if (priorApplied) {
     flags.push(`<span class="chip prior-applied-chip">Applied: ${escapeHtml(priorApplied)}</span>`);
   }
   if (matchRule) {
     flags.push(`<span class="chip hidden-rule-chip" title="${escapeAttr(formatRuleChipText(matchRule))}">Hidden: ${escapeHtml(formatRuleChipText(matchRule))}</span>`);
+  }
+  // Scanner's legitimacy signal (modes/pipeline.md `trust:` segment) — only
+  // written when a posting scored below 100, so absent/null means "never
+  // flagged," not "clean." Requires trust_filter enabled in portals.yml.
+  const trustScore = item.trustScore;
+  if (Number.isFinite(trustScore) && trustScore < 100) {
+    const tier = trustScore < 60 ? 'trust-chip-low' : 'trust-chip-mid';
+    const flagsTitle = (item.trustFlags || []).join(', ') || 'Legitimacy signal from the scanner';
+    flags.push(`<span class="chip trust-chip ${tier}" title="${escapeAttr(flagsTitle)}">Trust: ${escapeHtml(String(trustScore))}</span>`);
+  }
+  const ageDays = daysSincePosted(item);
+  if (ageDays !== null && ageDays >= 60) {
+    flags.push(`<span class="chip stale-chip stale-chip-concerning" title="Posted ${ageDays} days ago">Stale: ${ageDays}d</span>`);
+  } else if (ageDays !== null && ageDays >= 30) {
+    flags.push(`<span class="chip stale-chip stale-chip-aging" title="Posted ${ageDays} days ago">Aging: ${ageDays}d</span>`);
   }
   if (!flags.length) return '<span class="muted-cell">-</span>';
   return `<div class="flags-cell">${flags.join(' ')}</div>`;
@@ -1307,8 +1463,14 @@ function sortValueForItem(item, key) {
       const n = parseFloat(String(item.score || '').replace('/5', ''));
       return isFinite(n) ? n : -1;
     }
-    case 'flags':
-      return priorAppliedStatusFor(item.company) ? '0' : '1';
+    case 'flags': {
+      const ageDays = daysSincePosted(item);
+      const hasFlag = Boolean(item.deadReason)
+        || Boolean(priorAppliedStatusFor(item.company))
+        || (Number.isFinite(item.trustScore) && item.trustScore < 100)
+        || (ageDays !== null && ageDays >= 30);
+      return hasFlag ? '0' : '1';
+    }
     default:
       return String(item.company || '').toLowerCase();
   }
@@ -1759,13 +1921,24 @@ function makeEvaluateAction(item) {
     return chip;
   }
 
+  // Persisted (pipeline.md `dead:` segment, survives reload) or from this
+  // session's own job — either way, don't let it quietly go back to a plain
+  // "Evaluate" button as if nothing happened (see markPipelineItemDead).
+  const deadReason = (status === 'dead' ? job.deadReason : '') || item.deadReason || '';
+
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'secondary action-evaluate';
-  btn.textContent = status === 'error' ? 'Retry Evaluate' : 'Evaluate';
-  btn.title = status === 'error'
-    ? `Evaluation failed${job?.error ? `: ${job.error}` : ''} — click to retry`
-    : 'Run AI evaluation on this posting';
+  if (deadReason) {
+    btn.classList.add('action-dead-link');
+    btn.textContent = 'Dead Link — Retry?';
+    btn.title = `Marked dead: ${deadReason} — click to re-check`;
+  } else {
+    btn.textContent = status === 'error' ? 'Retry Evaluate' : 'Evaluate';
+    btn.title = status === 'error'
+      ? `Evaluation failed${job?.error ? `: ${job.error}` : ''} — click to retry`
+      : 'Run AI evaluation on this posting';
+  }
   btn.dataset.evaluateUrl = url;
   btn.dataset.evaluateSource = String(item?.source || inferSource(item) || 'pipeline').trim();
   btn.addEventListener('click', (ev) => {
@@ -2438,7 +2611,7 @@ evaluateJobsList?.addEventListener('click', (ev) => {
   const retryId = target.dataset.evalRetry;
   if (!retryId) return;
   const failedJob = evaluateState.jobs.find((j) => j.id === retryId);
-  if (!failedJob || failedJob.status !== 'error') return;
+  if (!failedJob || (failedJob.status !== 'error' && failedJob.status !== 'dead')) return;
   runEvaluation(failedJob.url, { sourceLabel: failedJob.sourceLabel, focusJob: true });
 });
 
@@ -2521,13 +2694,64 @@ async function startEvaluationJob(job) {
             job.verdict = verdict;
             job.exitCode = payload.code;
             if (payload.code === 0) {
+              const deadReason = extractDeadLinkReason(fullText);
+              if (deadReason) {
+                // The liveness gate (modes/oferta.md) stopped before Block A —
+                // no report was written, so there's nothing to enrich/link.
+                // Flag the pending row instead so this doesn't just vanish
+                // into the Evaluate tab's scrollback.
+                job.status = 'dead';
+                job.deadReason = deadReason;
+                job.verdict = job.verdict || `DEAD LINK: ${deadReason}`;
+                try {
+                  await api('/api/pipeline/mark-dead', {
+                    method: 'POST',
+                    body: JSON.stringify({ url: job.url, reason: deadReason }),
+                  });
+                } catch {
+                  // Same as the enrich case below — the standalone Evaluate
+                  // tab can target a URL that was never a pending row.
+                }
+                showToast(`Dead link: ${deadReason}`, 'error');
+                loadPipeline(); // pick up the dead flag
+                renderEvaluationJobs();
+                maybeRefreshEvaluationViewer(job.id);
+                refreshPipelineEvaluationIndicators();
+                continue;
+              }
               job.status = 'success';
-              const reportInfo = await reportInfoForUrl(job.url);
-              job.reportSlug = reportInfo.filename;
-              job.score = reportInfo.score;
+              const reportFilename = extractReportFilename(fullText);
+              if (reportFilename) {
+                // Deterministic: the evaluator told us exactly what it wrote.
+                // Use it directly, and backfill the pending row's Company/Role
+                // (and URL, if the report's own is cleaner) from the same
+                // report — see enrichPipelineItemFromReport in server.mjs.
+                job.reportSlug = reportFilename;
+                try {
+                  const enriched = await api('/api/pipeline/enrich', {
+                    method: 'POST',
+                    body: JSON.stringify({ url: job.url, reportFilename }),
+                  });
+                  if (enriched?.score) job.score = enriched.score;
+                } catch {
+                  // Not every evaluated URL is a pending row — the standalone
+                  // Evaluate tab can target one that was never added to the
+                  // pipeline. That's expected, not a failure worth surfacing.
+                }
+                if (!job.score) {
+                  const reportInfo = await reportInfoForUrl(job.url);
+                  job.score = reportInfo.score;
+                }
+              } else {
+                // Fallback for an older/different prompt shape with no REPORT line.
+                const reportInfo = await reportInfoForUrl(job.url);
+                job.reportSlug = reportInfo.filename;
+                job.score = reportInfo.score;
+              }
               showToast('Evaluation complete — report + tracker updated', 'success');
               reportsLoaded = false; // force reload on next visit
               loadTracker();
+              loadPipeline(); // pick up the backfilled company/role/url + score/link
             } else {
               job.status = 'error';
               showToast(`Evaluation exited with code ${payload.code}`, 'error');
@@ -2578,9 +2802,10 @@ function renderEvaluationJobs() {
   if (evaluateJobsMeta) {
     const active = evaluateState.jobs.filter((j) => j.status === 'running').length;
     const success = evaluateState.jobs.filter((j) => j.status === 'success').length;
+    const dead = evaluateState.jobs.filter((j) => j.status === 'dead').length;
     const failed = evaluateState.jobs.filter((j) => j.status === 'error').length;
     const cancelled = evaluateState.jobs.filter((j) => j.status === 'cancelled').length;
-    evaluateJobsMeta.textContent = `Running: ${active} | Done: ${success} | Failed: ${failed} | Cancelled: ${cancelled}`;
+    evaluateJobsMeta.textContent = `Running: ${active} | Done: ${success} | Dead: ${dead} | Failed: ${failed} | Cancelled: ${cancelled}`;
   }
 
   if (!evaluateJobsList) return;
@@ -2604,7 +2829,7 @@ function renderEvaluationJobs() {
           <button type="button" class="secondary" data-eval-select="${escapeAttr(job.id)}">View</button>
           ${!running && job.reportSlug ? `<button type="button" class="secondary" data-eval-report="${escapeAttr(job.reportSlug)}">Report</button>` : ''}
           ${running ? `<button type="button" class="secondary" data-eval-cancel="${escapeAttr(job.id)}">Cancel</button>` : ''}
-          ${job.status === 'error' ? `<button type="button" class="secondary action-retry" data-eval-retry="${escapeAttr(job.id)}">Retry</button>` : ''}
+          ${job.status === 'error' || job.status === 'dead' ? `<button type="button" class="secondary action-retry" data-eval-retry="${escapeAttr(job.id)}">Retry</button>` : ''}
         </div>
       </article>`;
   }).join('');
@@ -2651,6 +2876,7 @@ function inferVerdictForJob(job) {
 function evalStatusLabel(status) {
   if (status === 'running') return 'Running';
   if (status === 'success') return 'Done';
+  if (status === 'dead') return 'Dead Link';
   if (status === 'cancelled') return 'Cancelled';
   return 'Error';
 }
@@ -2665,4 +2891,24 @@ function compactUrl(value) {
 function extractVerdict(text) {
   const m = String(text || '').match(/VERDICT:\s*(.+)/);
   return m ? `VERDICT: ${m[1].trim()}` : '';
+}
+
+// The evaluator prints its own report filename as a REPORT: line — reading it
+// directly is deterministic, unlike guessing the report back from job.url via
+// reportInfoForUrl(), which silently fails whenever the report's own **URL:**
+// ends up differing from the pending row's stored URL (redirect/tracking
+// links, blank-company stub rows that had never been resolved before this
+// run — see enrichPipelineItemFromReport in server.mjs for the full story).
+function extractReportFilename(text) {
+  const m = String(text || '').match(/REPORT:\s*(\S+\.md)/);
+  return m ? m[1].trim() : '';
+}
+
+// modes/oferta.md's Liveness gate stops the evaluator before Block A on a
+// dead posting — the DEAD_LINK: line is how it tells the dashboard that
+// happened instead of a REPORT:/VERDICT: pair (see buildEvalPrompt in
+// server.mjs).
+function extractDeadLinkReason(text) {
+  const m = String(text || '').match(/DEAD_LINK:\s*(.+)/);
+  return m ? m[1].trim() : '';
 }
