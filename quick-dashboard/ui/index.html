@@ -45,11 +45,16 @@
           <button id="analyticsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="analyticsPanel">Analytics</button>
           <button id="reportsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="reportsPanel">Reports</button>
           <button id="evaluateTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="evaluatePanel">Evaluate</button>
+          <button id="profileTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="profilePanel">Profile</button>
         </div>
         <div class="actions tab-actions">
           <button id="themeToggleBtn" class="secondary theme-toggle-btn" type="button" aria-pressed="false">🌙 Dark</button>
           <button id="refreshBtn">Refresh</button>
           <button id="scanBtn">Run Scan</button>
+          <button id="enrichPendingBtn" class="secondary" type="button"
+            title="Backfill company/title/location for pending BuiltIn, FractionalJobs, Adzuna, and Glassdoor rows that still show a placeholder (LinkedIn needs its own login — see linkedin-login.mjs). Flags postings that turn out to be closed.">
+            Enrich Pending
+          </button>
         </div>
       </div>
 
@@ -223,7 +228,13 @@
 
       <div id="evaluatePanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="evaluateTabBtn">
         <section class="card">
-          <h2 class="section-title">Evaluate a Job Posting</h2>
+          <div class="section-title-row">
+            <h2 class="section-title">Evaluate a Job Posting</h2>
+            <button id="spendTierBtn" class="secondary spend-tier-btn" type="button"
+              title="Model spend tier — applies to ALL career-ops evaluations (this dashboard, the CLI, batch runs), read from config/profile.yml. Click to cycle Economy → Standard → Premium.">
+              ⚖️ Standard
+            </button>
+          </div>
           <p class="section-sub">Runs the full career-ops evaluation (modes/oferta.md) via Claude and persists the report + tracker row — identical to a CLI run.</p>
           <form id="evaluateForm" class="evaluate-form">
             <label>
@@ -236,6 +247,17 @@
           <div id="evaluateJobsList" class="evaluate-jobs-list"></div>
           <div id="evaluateVerdict" class="evaluate-verdict is-hidden"></div>
           <pre id="evaluateOutput" class="log eval-log"></pre>
+        </section>
+      </div>
+
+      <div id="profilePanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="profileTabBtn">
+        <section class="card">
+          <h2 class="section-title">Targeting &amp; Scoring Criteria</h2>
+          <p class="section-sub">What actually drives a score — read live from <code>modes/_profile.md</code> and <code>config/profile.yml</code>. Read-only here; edit those files directly (or ask the agent to) to change anything.</p>
+          <div id="profileSummary" class="profile-summary"></div>
+          <div id="profileViewer" class="profile-viewer">
+            <p class="reports-empty-hint">Loading…</p>
+          </div>
         </section>
       </div>
 

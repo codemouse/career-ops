@@ -407,6 +407,27 @@ h1 {
   color: var(--section-title-color);
 }
 
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.section-title-row .section-title {
+  margin: 0 0 10px;
+}
+
+.spend-tier-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
 .tab-row {
   display: flex;
   align-items: center;
@@ -1061,6 +1082,26 @@ th {
   font-weight: 700;
 }
 
+/* Ops baseline checklist status chips (onboarding, version, tracker files, warnings). */
+.chip.ops-chip-good {
+  border-color: #b2e8bb;
+  color: #2b8a3e;
+  background: #ebfbee;
+}
+
+.chip.ops-chip-warn {
+  border-color: #f5d59a;
+  color: #f08c00;
+  background: #fff4e0;
+}
+
+.chip.ops-chip-bad {
+  border-color: #f3b4b4;
+  color: #c92a2a;
+  background: #fdeeee;
+  font-weight: 700;
+}
+
 .item-actions .action-unhide {
   border-color: #14844a;
   color: #0e6c3c;
@@ -1644,6 +1685,56 @@ body.chaos-polish .card {
   padding: 48px 0;
 }
 
+.profile-viewer {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+
+.profile-summary {
+  margin-bottom: 16px;
+}
+
+.profile-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 20px;
+}
+
+.profile-summary-item {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.profile-summary-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.profile-summary-value {
+  font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.profile-summary-subvalue {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
 .md-body h1 { font-size: 1.25rem; margin: 0 0 12px; }
 .md-body h2 { font-size: 1.05rem; margin: 20px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
 .md-body h3 { font-size: 0.95rem; margin: 16px 0 6px; }
@@ -1991,6 +2082,24 @@ html.theme-dark .chip.legitimacy-chip.legitimacy-caution {
 }
 
 html.theme-dark .chip.legitimacy-chip.legitimacy-suspicious {
+  border-color: #8a3a3a;
+  color: #f19b9b;
+  background: #331d1d;
+}
+
+html.theme-dark .chip.ops-chip-good {
+  border-color: #2f7a4d;
+  background: #123420;
+  color: #7fd9ac;
+}
+
+html.theme-dark .chip.ops-chip-warn {
+  border-color: #a1731e;
+  background: #332810;
+  color: #f0b35c;
+}
+
+html.theme-dark .chip.ops-chip-bad {
   border-color: #8a3a3a;
   color: #f19b9b;
   background: #331d1d;

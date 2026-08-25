@@ -35,6 +35,9 @@ const reportsPanel = document.getElementById('reportsPanel');
 const evaluatePanel = document.getElementById('evaluatePanel');
 const refreshBtn = document.getElementById('refreshBtn');
 const scanBtn = document.getElementById('scanBtn');
+const enrichPendingBtn = document.getElementById('enrichPendingBtn');
+const profileTabBtn = document.getElementById('profileTabBtn');
+const profilePanel = document.getElementById('profilePanel');
 const dashboardTitle = document.getElementById('dashboardTitle');
 const brandTagline = document.getElementById('brandTagline');
 const toastRack = document.getElementById('toastRack');
@@ -158,6 +161,7 @@ const pipelineFilters = {
 
 refreshBtn.addEventListener('click', loadAll);
 scanBtn.addEventListener('click', runScan);
+enrichPendingBtn?.addEventListener('click', runEnrichPending);
 statusForm.addEventListener('submit', submitStatus);
 startTabBtn?.addEventListener('click', () => setActiveTab('start'));
 pipelineTabBtn?.addEventListener('click', () => setActiveTab('pipeline'));
@@ -165,6 +169,7 @@ manageTabBtn?.addEventListener('click', () => setActiveTab('manage'));
 analyticsTabBtn?.addEventListener('click', () => setActiveTab('analytics'));
 reportsTabBtn?.addEventListener('click', () => { setActiveTab('reports'); loadReports(); });
 evaluateTabBtn?.addEventListener('click', () => setActiveTab('evaluate'));
+profileTabBtn?.addEventListener('click', () => { setActiveTab('profile'); loadProfile(); });
 baselineRefreshBtn?.addEventListener('click', loadOpsBaseline);
 runVerifyPipelineBtn?.addEventListener('click', () => runOpsAction('verify-pipeline'));
 runVerifyPortalsBtn?.addEventListener('click', () => runOpsAction('verify-portals'));
@@ -346,11 +351,12 @@ async function pickResume() {
 loadAll();
 setActiveTab('pipeline');
 initWhimsy();
+initSpendTierToggle();
 
 function setActiveTab(tab) {
-  const tabs = ['start', 'pipeline', 'manage', 'analytics', 'reports', 'evaluate'];
-  const btns = { start: startTabBtn, pipeline: pipelineTabBtn, manage: manageTabBtn, analytics: analyticsTabBtn, reports: reportsTabBtn, evaluate: evaluateTabBtn };
-  const panels = { start: startPanel, pipeline: pipelinePanel, manage: managePanel, analytics: analyticsPanel, reports: reportsPanel, evaluate: evaluatePanel };
+  const tabs = ['start', 'pipeline', 'manage', 'analytics', 'reports', 'evaluate', 'profile'];
+  const btns = { start: startTabBtn, pipeline: pipelineTabBtn, manage: manageTabBtn, analytics: analyticsTabBtn, reports: reportsTabBtn, evaluate: evaluateTabBtn, profile: profileTabBtn };
+  const panels = { start: startPanel, pipeline: pipelinePanel, manage: managePanel, analytics: analyticsPanel, reports: reportsPanel, evaluate: evaluatePanel, profile: profilePanel };
   for (const t of tabs) {
     const active = t === tab;
     btns[t]?.classList.toggle('active', active);
@@ -363,6 +369,7 @@ function setActiveTab(tab) {
   document.body.classList.toggle('tab-analytics', tab === 'analytics');
   document.body.classList.toggle('tab-reports', tab === 'reports');
   document.body.classList.toggle('tab-evaluate', tab === 'evaluate');
+  document.body.classList.toggle('tab-profile', tab === 'profile');
   if (tab === 'pipeline') renderPipeline();
   if (tab === 'analytics') renderAnalytics();
 }
@@ -409,11 +416,21 @@ async function loadOpsBaseline() {
   opsChecklist.innerHTML = '';
 
   const c = data.checks || {};
-  renderChip(opsChecklist, `Onboarding: ${c.onboardingReady ? 'ready' : 'needs setup'}`);
-  renderChip(opsChecklist, `Version: ${c.upToDate ? 'up-to-date' : 'update available'}`);
-  renderChip(opsChecklist, `Tracker file: ${c.trackerPresent ? 'present' : 'missing'}`);
-  renderChip(opsChecklist, `Follow-ups file: ${c.followupsPresent ? 'present' : 'missing'}`);
-  renderChip(opsChecklist, `Warnings: ${c.hasWarnings ? 'yes' : 'none'}`);
+  renderChip(opsChecklist, `Onboarding: ${c.onboardingReady ? 'ready' : 'needs setup'}`, {
+    className: `ops-chip ${c.onboardingReady ? 'ops-chip-good' : 'ops-chip-bad'}`,
+  });
+  renderChip(opsChecklist, `Version: ${c.upToDate ? 'up-to-date' : 'update available'}`, {
+    className: `ops-chip ${c.upToDate ? 'ops-chip-good' : 'ops-chip-warn'}`,
+  });
+  renderChip(opsChecklist, `Tracker file: ${c.trackerPresent ? 'present' : 'missing'}`, {
+    className: `ops-chip ${c.trackerPresent ? 'ops-chip-good' : 'ops-chip-bad'}`,
+  });
+  renderChip(opsChecklist, `Follow-ups file: ${c.followupsPresent ? 'present' : 'missing'}`, {
+    className: `ops-chip ${c.followupsPresent ? 'ops-chip-good' : 'ops-chip-bad'}`,
+  });
+  renderChip(opsChecklist, `Warnings: ${c.hasWarnings ? 'yes' : 'none'}`, {
+    className: `ops-chip ${c.hasWarnings ? 'ops-chip-warn' : 'ops-chip-good'}`,
+  });
 
   if (opsOutput) {
     const stats = (data.statsSummary || '').trim();
@@ -1617,6 +1634,49 @@ function applyTheme(theme) {
   }
 }
 
+// Spend tier lives in config/profile.yml (modes/_shared.md § Spend Tier) and
+// is read by every evaluation path in career-ops — the CLI, batch runs, and
+// this dashboard's own Evaluate button — so a change here is not a
+// dashboard-local setting, it's a config write that changes what every one
+// of those paths does on its next run.
+const SPEND_TIERS = ['economy', 'standard', 'premium'];
+const SPEND_TIER_LABELS = { economy: '⚡ Economy', standard: '⚖️ Standard', premium: '💎 Premium' };
+
+async function initSpendTierToggle() {
+  const btn = document.getElementById('spendTierBtn');
+  if (!btn) return;
+
+  let tier = 'standard';
+  try {
+    const data = await api('/api/spend-tier');
+    if (SPEND_TIERS.includes(data?.tier)) tier = data.tier;
+  } catch {
+    // Server unreachable at load time — leave the button on its default
+    // label; the click handler will surface any real error when used.
+  }
+  applySpendTierLabel(btn, tier);
+
+  btn.addEventListener('click', async () => {
+    const current = btn.dataset.tier || tier;
+    const next = SPEND_TIERS[(SPEND_TIERS.indexOf(current) + 1) % SPEND_TIERS.length];
+    btn.disabled = true;
+    try {
+      await api('/api/spend-tier', { method: 'POST', body: JSON.stringify({ tier: next }) });
+      applySpendTierLabel(btn, next);
+      showToast(`Spend tier set to ${next} — applies to all career-ops evaluations, not just this dashboard`, 'success');
+    } catch (err) {
+      showToast(formatActionError('Could not change spend tier', err), 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+function applySpendTierLabel(btn, tier) {
+  btn.dataset.tier = tier;
+  btn.textContent = SPEND_TIER_LABELS[tier] || SPEND_TIER_LABELS.standard;
+}
+
 function initTitleEasterEgg() {
   if (!dashboardTitle) return;
   dashboardTitle.addEventListener('click', () => {
@@ -1801,9 +1861,9 @@ function looksLikeFullTimeByHost(host, path) {
 }
 
 function renderChip(container, text, options = {}) {
-  const { clickable = false, active = false, onClick } = options;
+  const { clickable = false, active = false, onClick, className = '' } = options;
   const chip = document.createElement('span');
-  chip.className = `chip${clickable ? ' clickable' : ''}${active ? ' active' : ''}`;
+  chip.className = `chip${clickable ? ' clickable' : ''}${active ? ' active' : ''}${className ? ` ${className}` : ''}`;
   chip.textContent = text;
   if (clickable && typeof onClick === 'function') {
     chip.setAttribute('role', 'button');
@@ -2232,6 +2292,28 @@ async function runScan() {
   }
 }
 
+// Backfills company/title/location for pending rows still showing a
+// placeholder (blank company, "Job lead #id", etc.) from BuiltIn,
+// FractionalJobs, Adzuna, and Glassdoor — see enrich-pipeline.mjs. LinkedIn
+// isn't included here: it needs its own authenticated session
+// (linkedin-login.mjs), so it has its own separate script/button-free path
+// (`npm run linkedin:enrich`) rather than one this button can silently skip.
+async function runEnrichPending() {
+  enrichPendingBtn.disabled = true;
+  enrichPendingBtn.textContent = 'Enriching...';
+  try {
+    const data = await api('/api/pipeline/enrich-sources', { method: 'POST' });
+    const summary = data.stdout || data.stderr || 'Enrichment finished.';
+    showToast(summary.split('\n').filter(Boolean).slice(-2).join(' — ') || 'Enrichment finished.', 'success');
+    await loadPipeline();
+  } catch (err) {
+    showToast(formatActionError('Enrich Pending failed', err), 'error');
+  } finally {
+    enrichPendingBtn.disabled = false;
+    enrichPendingBtn.textContent = 'Enrich Pending';
+  }
+}
+
 async function submitStatus(ev) {
   ev.preventDefault();
   const selector = document.getElementById('selectorInput').value.trim();
@@ -2438,6 +2520,60 @@ async function loadReports() {
   } catch (err) {
     el.innerHTML = `<p class="chart-empty">Error: ${escapeHtml(String(err.message))}</p>`;
   }
+}
+
+let profileLoaded = false;
+
+async function loadProfile() {
+  if (profileLoaded) return; // static content for the life of the page; Refresh reloads everything anyway
+  const summaryEl = document.getElementById('profileSummary');
+  const viewerEl = document.getElementById('profileViewer');
+  if (!summaryEl || !viewerEl) return;
+  try {
+    const data = await api('/api/profile');
+    summaryEl.innerHTML = renderProfileSummary(data.summary);
+    if (data.profileMdMissing) {
+      viewerEl.innerHTML = '<p class="chart-empty">modes/_profile.md not found — nothing to show yet.</p>';
+    } else {
+      const md = data.profileMd || '';
+      viewerEl.innerHTML = `<div class="md-body">${typeof marked !== 'undefined' ? marked.parse(md) : `<pre>${escapeHtml(md)}</pre>`}</div>`;
+    }
+    profileLoaded = true;
+  } catch (err) {
+    viewerEl.innerHTML = `<p class="chart-empty">Error: ${escapeHtml(String(err.message || err))}</p>`;
+  }
+}
+
+function renderProfileSummary(summary) {
+  if (!summary) return '';
+  const roles = Array.isArray(summary.targetRoles) ? summary.targetRoles : [];
+  const comp = summary.compensation || {};
+  const loc = summary.location || {};
+  const roleChips = roles.length
+    ? roles.map((r) => `<span class="chip">${escapeHtml(r)}</span>`).join('')
+    : '<span class="muted-cell">none configured</span>';
+  const locBits = [loc.city, loc.country].filter(Boolean).join(', ');
+  return `
+    <div class="profile-summary-row">
+      <div class="profile-summary-item">
+        <div class="profile-summary-label">Target Roles</div>
+        <div class="profile-summary-value">${roleChips}</div>
+      </div>
+      <div class="profile-summary-item">
+        <div class="profile-summary-label">Comp Target</div>
+        <div class="profile-summary-value">${escapeHtml(comp.target_range || comp.minimum || '—')}</div>
+      </div>
+      <div class="profile-summary-item">
+        <div class="profile-summary-label">Location</div>
+        <div class="profile-summary-value">${escapeHtml(locBits || '—')}</div>
+        ${comp.location_flexibility ? `<div class="profile-summary-subvalue">${escapeHtml(comp.location_flexibility)}</div>` : ''}
+      </div>
+      <div class="profile-summary-item">
+        <div class="profile-summary-label">Spend Tier</div>
+        <div class="profile-summary-value">${escapeHtml(SPEND_TIER_LABELS[summary.spendTier] || summary.spendTier || '—')}</div>
+      </div>
+    </div>
+  `;
 }
 
 async function openReport(slug, activeBtn) {
@@ -2681,7 +2817,15 @@ async function startEvaluationJob(job) {
         if (!evtData) continue;
         try {
           const payload = JSON.parse(evtData);
-          if (evtType === 'text' && payload.text) {
+          if (evtType === 'start' && payload.model) {
+            // Surfaces which model this run resolved to (config/profile.yml's
+            // spend_tier) so a slow/expensive run isn't a mystery — economy
+            // (haiku) vs standard (sonnet) vs premium (opus) is a real cost
+            // difference, and this is the only place that choice is visible.
+            fullText += `[spend tier: ${payload.tier || '?'} — ${payload.model}]\n`;
+            job.output = fullText;
+            maybeRefreshEvaluationViewer(job.id);
+          } else if (evtType === 'text' && payload.text) {
             fullText += payload.text;
             job.output = fullText;
             maybeRefreshEvaluationViewer(job.id);

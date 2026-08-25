@@ -127,6 +127,13 @@ function handleApi(req, res, path) {
     });
   }
 
+  if (req.method === 'POST' && path === '/api/pipeline/enrich-sources') {
+    return readBody(req, res, async () => {
+      const result = await runEnrichPipeline();
+      return json(res, result.status === 0 ? 200 : 500, result);
+    });
+  }
+
   if (req.method === 'GET' && path === '/api/fit-filters') {
     return json(res, 200, { rules: readFitFilters() });
   }
@@ -135,6 +142,20 @@ function handleApi(req, res, path) {
     return readBody(req, res, ({ id }) => {
       if (!id || typeof id !== 'string') return json(res, 400, { error: 'id is required' });
       const result = removeFitFilterRule(id);
+      return json(res, result.ok ? 200 : 500, result);
+    });
+  }
+
+  if (req.method === 'GET' && path === '/api/spend-tier') {
+    return json(res, 200, { tier: readSpendTier() });
+  }
+
+  if (req.method === 'POST' && path === '/api/spend-tier') {
+    return readBody(req, res, ({ tier }) => {
+      if (!Object.keys(SPEND_TIER_MODELS).includes(tier)) {
+        return json(res, 400, { error: `tier must be one of: ${Object.keys(SPEND_TIER_MODELS).join(', ')}` });
+      }
+      const result = writeSpendTier(tier);
       return json(res, result.ok ? 200 : 500, result);
     });
   }
@@ -149,6 +170,10 @@ function handleApi(req, res, path) {
       const result = runOpsAction(action);
       return json(res, 200, { ok: result.status === 0, stdout: result.stdout, stderr: result.stderr });
     });
+  }
+
+  if (req.method === 'GET' && path === '/api/profile') {
+    return json(res, 200, readProfileCriteria());
   }
 
   if (req.method === 'GET' && path === '/api/resumes') {
@@ -1485,6 +1510,28 @@ function runCareerOpsPdfOnDemand(company) {
   });
 }
 
+// Async spawn, same reasoning as runCareerOpsPdfOnDemand: enrich-pipeline.mjs
+// does a real page.goto() per pending BuiltIn/FractionalJobs/Adzuna/Glassdoor
+// row (see that file for why — both hosts block anything short of a real
+// rendered browser), so a sweep of even a modest backlog can run well past
+// spawnSync-friendly durations. spawnSync would freeze every other endpoint
+// (including plain page loads) for the whole sweep.
+function runEnrichPipeline() {
+  return new Promise((resolvePromise) => {
+    const child = spawn('node', ['enrich-pipeline.mjs'], { cwd: root, encoding: 'utf8' });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (err) => {
+      resolvePromise({ status: 1, stdout: stdout.trim(), stderr: String(err?.message || err) });
+    });
+    child.on('close', (code) => {
+      resolvePromise({ status: Number.isInteger(code) ? code : 1, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+  });
+}
+
 function readOpsBaseline() {
   const doctorRaw = runNode(['doctor.mjs', '--json']);
   const updateRaw = runNode(['update-system.mjs', 'check']);
@@ -1814,6 +1861,75 @@ function readReportMeta(filename) {
   return peekReportMeta(dir, safeName);
 }
 
+// Surfaces the targeting/scoring criteria that actually drive an evaluation —
+// modes/_profile.md (target roles, comp-floor and risk-tolerance calibration,
+// location policy, ...) plus a quick-glance summary from config/profile.yml —
+// so the reasoning behind a score isn't locked inside files nobody but the
+// agent reads mid-run. Read-only: this tab never writes either file (edit
+// them directly, or ask the agent to, the same way they were written).
+function readProfileCriteria() {
+  const profileMdPath = resolve(root, 'modes', '_profile.md');
+  const profileMd = existsSync(profileMdPath) ? readFileSync(profileMdPath, 'utf8') : '';
+
+  let yml = {};
+  try {
+    yml = (existsSync(PROFILE_YML_PATH) ? yaml.load(readFileSync(PROFILE_YML_PATH, 'utf8')) : {}) || {};
+  } catch { /* malformed YAML — summary just comes back empty, profileMd still renders */ }
+
+  return {
+    profileMd,
+    profileMdMissing: !existsSync(profileMdPath),
+    summary: {
+      targetRoles: yml.target_roles?.primary || [],
+      compensation: yml.compensation || null,
+      location: yml.location || null,
+      spendTier: readSpendTier(),
+    },
+  };
+}
+
+// modes/_shared.md § Spend Tier: config/profile.yml's spend_tier is supposed to
+// control which model evaluates offers everywhere in career-ops, but that
+// mapping only ever lived in prose the AGENT reads mid-run — nothing upstream
+// of the agent's own spawn can act on it. This dashboard's headless Evaluate
+// is the one caller that spawns the agent itself (every other path is the
+// user's own interactive CLI session, already on whatever model they picked),
+// so it's the one place the model choice has to be resolved BEFORE spawn, from
+// a plain file read here rather than left to the agent to notice too late.
+// Model IDs match batch/batch-runner.sh's spend_tier_to_model() exactly — one
+// canonical mapping, not a second one drifting on its own.
+const SPEND_TIER_MODELS = { economy: 'claude-haiku-4-5', standard: 'claude-sonnet-5', premium: 'claude-opus-5' };
+const PROFILE_YML_PATH = resolve(root, 'config', 'profile.yml');
+
+// config/profile.yml's spend_tier is a plain top-level `key: value` line (no
+// nesting, no inline comment on that line in practice) — a targeted regex
+// replace keeps every comment and every other setting in the file untouched,
+// where a yaml.load()+dump() round-trip would silently reformat/strip both.
+function readSpendTier() {
+  try {
+    if (!existsSync(PROFILE_YML_PATH)) return 'standard';
+    const doc = yaml.load(readFileSync(PROFILE_YML_PATH, 'utf8')) || {};
+    const tier = String(doc.spend_tier || 'standard').toLowerCase();
+    return SPEND_TIER_MODELS[tier] ? tier : 'standard';
+  } catch {
+    return 'standard';
+  }
+}
+
+function writeSpendTier(tier) {
+  try {
+    if (!existsSync(PROFILE_YML_PATH)) return { ok: false, error: 'config/profile.yml not found' };
+    const text = readFileSync(PROFILE_YML_PATH, 'utf8');
+    const lineRe = /^spend_tier:.*$/m;
+    const newLine = `spend_tier: ${tier}`;
+    const updated = lineRe.test(text) ? text.replace(lineRe, newLine) : `${text.trimEnd()}\n\n${newLine}\n`;
+    writeFileSync(PROFILE_YML_PATH, updated);
+    return { ok: true, tier };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
 function buildEvalPrompt(url, today) {
   const memFile = resolve(root, '.career-ops-quick-dashboard', 'memory.json');
   let memory = '';
@@ -1873,12 +1989,27 @@ function streamEvaluate(req, res, url) {
     return msg.includes('no stdin data received in 3s') && msg.includes('redirect stdin explicitly');
   };
 
-  sendEvent('start', { url, today });
+  const tier = readSpendTier();
+  const model = SPEND_TIER_MODELS[tier] || SPEND_TIER_MODELS.standard;
+  sendEvent('start', { url, today, tier, model });
 
   const child = spawn(
     claude,
     ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
      '--permission-mode', 'acceptEdits',
+     '--model', model,
+     // This headless run never needs MCP tools (the prompt tells it to use
+     // browser-extract.mjs instead, and none of --allowedTools below is an
+     // mcp__* tool) — but without this, the CLI still loads whatever MCP
+     // servers are configured (Playwright, Google Drive, ...) and connects
+     // them before starting, unused. That connection can hang indefinitely
+     // (observed: `npm exec @playwright/mcp@latest` sitting at 0% CPU,
+     // never completing its handshake, apparently from contending with an
+     // already-running Playwright MCP server elsewhere on the machine) —
+     // which reads to the dashboard's fetch() as a bare "network error" with
+     // zero server-side output, since nothing is ever written to stdout.
+     // --strict-mcp-config with no --mcp-config loads zero MCP servers.
+     '--strict-mcp-config',
      '--allowedTools', 'Read,WebFetch,WebSearch,Write,Edit,Bash,Glob,Grep',
      '--disallowedTools', 'Task,NotebookEdit'],
     {

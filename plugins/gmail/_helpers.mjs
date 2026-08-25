@@ -393,7 +393,10 @@ export function titleFromUrl(url) {
       return readable.replace(/\b\w/g, (c) => c.toUpperCase());
     }
     // No usable slug (e.g. LinkedIn/Adzuna/Glassdoor numeric-id URLs) — fall
-    // back to a short unique fragment so distinct leads never collide.
+    // back to a short unique fragment so distinct leads never collide. This
+    // ingest path has no browser and no LinkedIn session, so it can't resolve
+    // the real title itself; for LinkedIn specifically, enrich-linkedin-pipeline.mjs
+    // backfills this placeholder later, once a session is available.
     const idLike = last || u.searchParams.get('jobListingId') || segments[segments.length - 2] || '';
     return idLike ? `Job lead #${idLike.slice(-10)}` : '';
   } catch {

@@ -129,7 +129,8 @@ without checking the posting is actually back first.
 3. **WebSearch (last resort):** Search in secondary portals that index the JD.
 
 **Special cases:**
-- **LinkedIn**: May require login → mark `[!]` and ask the user to paste the text
+- **LinkedIn**: Unauthenticated requests (Playwright, WebFetch, `check-liveness.mjs`) redirect every `/jobs/view/{id}/` URL to an authwall — confirmed directly, not a maybe. No JD, no closure banner, nothing to read. If a real login session is available (`.linkedin-session.json`, saved once via `node linkedin-login.mjs`), use `node enrich-linkedin-pipeline.mjs` to batch-resolve pending LinkedIn leads' real company/title/location/posted-date (fixing the `Job lead #{id}` placeholder `plugins/gmail/_helpers.mjs` writes when an alert email has no per-link title) and flag closed postings in one pass — much cheaper than a per-URL evaluation loop. Without a session, mark `[!]` and ask the user to paste the text.
+- **BuiltIn / FractionalJobs / Adzuna / Glassdoor**: No login needed, but Adzuna and Glassdoor both block plain HTTP the same way LinkedIn blocks unauthenticated requests — curl, WebFetch, and Playwright's own `context.request` client all get a 403 challenge page; only a real rendered `page.goto()` clears it (confirmed directly). `node enrich-pipeline.mjs` backfills pending rows from all four the same way `enrich-linkedin-pipeline.mjs` does for LinkedIn — company/title/location, plus closure detection per host (FractionalJobs' "This Role is Closed" banner, Adzuna's `expired_ad_id=` redirect or "Cannot find page", a bot-challenge that never clears left as uncertain rather than guessed). Also reachable from the quick-dashboard's "Enrich Pending" button.
 - **PDF**: If the URL points to a PDF, read it directly with the Read tool
 - **`local:` prefix**: Read the local file. Example: `local:jds/linkedin-pm-ai.md` → read `jds/linkedin-pm-ai.md`
 
