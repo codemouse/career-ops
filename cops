@@ -12,8 +12,6 @@
 #
 # Anything not matching a known subcommand is forwarded to npm run <subcommand>
 # when package.json defines it, otherwise executed verbatim inside the container.
-#
-#   ./cops badge                     # the pun, paid off. No docker needed.
 
 set -euo pipefail
 
@@ -29,24 +27,7 @@ ensure_up() {
 
 case "${1:-}" in
   ""|help|-h|--help)
-    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
-    exit 0
-    ;;
-  badge)
-    # The pun, paid off. Pure decoration — no docker, no dependencies.
-    cat <<'EOF'
-
-        ,ad8888ba,
-       d8"'    `"8b     ______________________
-      d8'        `8b   |                      |
-      88          88   |      CAREER-OPS      |
-      88          88   |    ---------------   |
-      Y8,        ,8P   |   DETECTIVE OF FIT    |
-       Y8a.    .a8P    |______________________|
-        `"Y8888Y"'
-
-EOF
-    printf 'Badge #%04d — protect and serve your own job search.\n\n' "$((RANDOM % 9000 + 1000))"
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   up)
