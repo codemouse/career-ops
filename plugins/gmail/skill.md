@@ -12,7 +12,6 @@ emails, and returns them as leads. The engine writes them to the pipeline.
 ## Command
 
 - `node plugins.mjs run gmail` — ingest new leads from the configured label.
-- `node plugins/gmail/reauth.mjs` — mint a fresh `GMAIL_REFRESH_TOKEN` when ingest starts failing with `invalid_grant` (token expired/revoked — common if the Google Cloud OAuth consent screen is still in "Testing" status, which caps refresh tokens at 7 days). Runs the interactive consent flow locally and prints the new token to paste into `.env`.
 
 ## Setup
 

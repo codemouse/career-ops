@@ -290,7 +290,6 @@ Create a machine-readable summary from the completed A-G evaluation and global s
 ```yaml
 company: "{company}"
 role: "{role}"
-location: {JD's stated location/remote designation, concise, as a quoted string (e.g. "Remote, US" or "Boston, MA (Hybrid)"), or null when the JD states no location at all}
 score: {X.X}
 legitimacy_tier: "{High Confidence | Proceed with Caution | Suspicious}"
 archetype: "{detected}"
@@ -310,13 +309,14 @@ discard_reasons:
 via: {agency/recruiter firm as a quoted string, or null for direct applications}
 company_confidential: {true when the end employer is unknown (company is "?"), else false}
 advertised_comp: {verbatim JD salary/range as a quoted string (e.g. "80-90k EUR"), or null when the JD states nothing}
-posted_date: {the posting's freshness signal as YYYY-MM-DD, or null. Use the page/ATS's own absolute date when shown; otherwise convert a relative signal (e.g. "2 weeks ago") to an approximate date relative to today's date; null when no freshness signal was captured at all (e.g. pasted JD text only, no page snapshot)}
+reports_to: {the JD's stated reporting line as a quoted string (e.g. "VP of Marketing"), or null when the JD names none}
 risk_summary:
   legitimacy: "{high_confidence | proceed_with_caution | suspicious}"
   classification: "{clear | flagged | not_evaluated}"
   culture: "{pass | caution | fail | not_evaluated}"
   interview_redflags: "{none | caution | warning | not_evaluated}"
   ai_infra: "{consistent | mismatch | not_evaluated}"
+  ai_screening_disclosure: "{disclosed | corroborating_only | no_match | not_evaluated}"
 ```
 
 Rules:
@@ -324,11 +324,10 @@ Rules:
 - `score` is numeric only, without `/5`.
 - `final_decision` must reflect the full evaluation, not only the CV match.
 - `advertised_comp` is the JD's **own** figure, verbatim; `null` when the JD states nothing — never estimate it and never substitute researched market data (Block D research stays in Block D). Batch workers never write `data/salary-observations.tsv` — the report itself is the advertised observation (`salary-gap.mjs` reads it).
-- `location` is the JD's own stated location/remote designation, condensed to one line (city/state/country and/or remote scope — not the full Block A "Remote" row prose). `null` only when the JD gives no location signal whatsoever.
-- `posted_date` is the same freshness signal Block G Signal 1 already reads, just normalized to `YYYY-MM-DD` for downstream tooling. A relative signal ("2 weeks ago") converts to an approximate date — this is inherently imprecise, so prefer the page's own absolute date when one is shown. `null` when the liveness gate had no page snapshot to read (pasted JD text only) — never guess a date with no freshness signal at all.
+- `reports_to` is the reporting line the JD itself states, in the JD's own wording; `null` when the JD names none — never infer it from the title, the team size, or company research. It records the seat's altitude, which the title alone does not: an IC seat reporting to a Head of Marketing and one reporting to the CEO are different roles.
 - Do not invent missing data. If confidence is limited, set `confidence: "Low"` and explain the limitation in the human-readable sections.
 - `work_auth` reflects the Block A work-authorization tier: `no_sponsorship` only when the JD **explicitly** refuses sponsorship for a role outside the candidate's `authorized_in`; `unstated` when the JD is silent (neutral, not a blocker); `not_needed` when the role is within `authorized_in` or sponsorship isn't required; `sponsors` when the JD explicitly offers it.
-- `risk_summary` mirrors the `## Risk Summary` block row by row — same source verdicts, snake_cased: `legitimacy` from the Block G tier (`high_confidence` / `proceed_with_caution` / `suspicious`), `culture` from the Block A Culture screen (`pass` / `caution` / `fail`), `interview_redflags` from the red-flag file's warning level (`none` / `caution` / `warning`). Any row rendered `— not evaluated` (or `— no interview sessions yet`) is `not_evaluated` here. Never invent a value the block does not show.
+- `risk_summary` mirrors the `## Risk Summary` block row by row — same source verdicts, snake_cased: `legitimacy` from the Block G tier (`high_confidence` / `proceed_with_caution` / `suspicious`), `culture` from the Block A Culture screen (`pass` / `caution` / `fail`), `interview_redflags` from the red-flag file's warning level (`none` / `caution` / `warning`), `ai_screening_disclosure` from the Block G AI-screening disclosure signal (`disclosed` when the posting names AI/automated screening, `corroborating_only` when the jurisdiction requires disclosure and the posting is silent, `no_match` when the candidate's jurisdiction has no table row). Any row rendered `— not evaluated` (or `— no interview sessions yet`) is `not_evaluated` here. Never invent a value the block does not show.
 
 ### Step 3 — Save the Report
 
@@ -381,12 +380,14 @@ discard_reasons:
 via: {agency/recruiter firm as a quoted string, or null for direct applications}
 company_confidential: {true when the end employer is unknown (company is "?"), else false}
 advertised_comp: {verbatim JD salary/range as a quoted string (e.g. "80-90k EUR"), or null when the JD states nothing}
+reports_to: {the JD's stated reporting line as a quoted string (e.g. "VP of Marketing"), or null when the JD names none}
 risk_summary:
   legitimacy: "{high_confidence | proceed_with_caution | suspicious}"
   classification: "{clear | flagged | not_evaluated}"
   culture: "{pass | caution | fail | not_evaluated}"
   interview_redflags: "{none | caution | warning | not_evaluated}"
   ai_infra: "{consistent | mismatch | not_evaluated}"
+  ai_screening_disclosure: "{disclosed | corroborating_only | no_match | not_evaluated}"
 ```
 ```
 

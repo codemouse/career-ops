@@ -20,40 +20,13 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import {
-  extractUrls, canonicalJobUrl, isAuthenticEmail, parseRoleAtCompany,
-  getMessageBody, companyFromUrl, senderDomain, companyFromSender, sourceFromSender,
-  isKnownBoardName, titleFromUrl,
+  extractUrls, isCleanUrl, isAuthenticEmail, parseRoleAtCompany,
+  getMessageBody, companyFromUrl,
 } from './_helpers.mjs';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const STATE_PATH = 'data/gmail-state.json'; // the plugin's own processed-id cursor
-
-function hostLike(value) {
-  const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return '';
-  try {
-    return new URL(raw).hostname.toLowerCase();
-  } catch {
-    // Accept host-like labels such as "form.jotform.com" or "BuiltIn".
-    return raw.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-  }
-}
-
-function isBuiltinUrl(url) {
-  const host = hostLike(url);
-  return host === 'builtin.com' || host === 'www.builtin.com';
-}
-
-function shouldWriteSourceNote(sourceLabel, url, senderDom = '') {
-  const labelHost = hostLike(sourceLabel);
-  const senderHost = hostLike(senderDom);
-  const isJotformLabel = labelHost === 'jotform.com' || labelHost === 'form.jotform.com' || labelHost.endsWith('.jotform.com');
-  const isJotformSender = senderHost === 'jotform.com' || senderHost === 'form.jotform.com' || senderHost.endsWith('.jotform.com');
-  const isJotform = isJotformLabel || isJotformSender;
-  if (isJotform && isBuiltinUrl(url)) return false;
-  return Boolean(String(sourceLabel || '').trim());
-}
 
 /** Exchange the long-lived refresh token for a short-lived access token. */
 async function getAccessToken({ clientId, clientSecret, refreshToken }, fetchFn = globalThis.fetch) {
@@ -143,8 +116,6 @@ export default {
       }
       const headers = msg.payload?.headers || [];
       const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
-      const fromDomain = senderDomain(headers);
-      const sourceLabel = sourceFromSender(headers);
 
       // Fail-closed on spoofed mail (DMARC).
       if (!isAuthenticEmail(headers)) {
@@ -154,34 +125,21 @@ export default {
       }
 
       const seed = parseRoleAtCompany(subject);
-      const cleanUrls = extractUrls(getMessageBody(msg.payload))
-        .map(canonicalJobUrl)
-        .filter(Boolean);
+      const cleanUrls = extractUrls(getMessageBody(msg.payload)).filter(isCleanUrl);
       for (const url of cleanUrls) {
         if (seenUrls.has(url)) continue;
         seenUrls.add(url);
-        const note = shouldWriteSourceNote(sourceLabel, url, fromDomain) ? `source: ${sourceLabel}` : '';
-        // Digest subjects sometimes read "{Role} at Built In" — "Built In" there
-        // names the board the alert came from, not the employer, so it must not
-        // win over a genuinely empty company field.
-        const seedCompany = seed && !isKnownBoardName(seed.company) ? seed.company : '';
         jobs.push({
-          title: seed?.role || titleFromUrl(url) || 'Job lead (email)',
+          title: seed?.role || 'Job lead (email)',
           url,
-          company: companyFromUrl(url) || seedCompany || companyFromSender(fromDomain) || '',
+          company: companyFromUrl(url) || seed?.company || '',
           location: '',
-          note,
         });
       }
       processedIds.add(m.id);
     }
 
-    // --dry-run must stay a true no-op: advancing the cursor here would
-    // permanently mark these messages seen without ever writing their leads
-    // to the pipeline, indistinguishable from silently losing them (#gmail
-    // dry-run cursor leak — every job this run found becomes unrecoverable
-    // on the next real run, since it starts from an already-advanced state).
-    if (!ctx.dryRun) saveProcessedIds(processedIds);
+    if (!ctx?.dryRun) saveProcessedIds(processedIds);
     return jobs;
   },
 };
