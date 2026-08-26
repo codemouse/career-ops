@@ -33,8 +33,8 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
 8. Before tailoring, optionally compare the new JD with the latest tailored CV or JD. Resolve the application/report first with `node find.mjs {report-or-tracker-number}`. Use the resolved report/JD snapshot as `{new-jd.txt}` and the referenced prior CV or prior JD as `{previous-jd-or-cv.txt}`; if either source cannot be located, do not silently reuse a CV. Run `npm run jd:similarity -- {new-jd.txt} {previous-jd-or-cv.txt}` and display the `decision` and `score`. Reuse is allowed only when the recommendation is `reuse` or the user explicitly overrides it; `reuse-with-edits` still requires the listed edits, and `regenerate` requires the normal tailoring flow.
 9. Build an internal recruiter-side risk map from the JD using `modes/heuristics/recruiter-side.md`: likely doubts, matching evidence, and which document section should address each doubt
 10. Rewrite Professional Summary by injecting JD keywords + exit narrative bridge ("Built and sold a business. Now applying systems thinking to [JD domain].")
-11. Select top 3-4 most relevant projects for the job. If `cv.md` carries an Awards / Honors section, populate `awards[]` with the entries that support this role — for an early-career candidate a contest medal or dean's list often outranks a thin project. Omit the key when there is nothing to list and the section disappears entirely; never invent an award to fill it. If `cv.md` carries a `## Previous Experience` section (condensed pre-cutoff roles, one line each — distinct from the detailed `## Experience` section), map every one of its entries into `earlier_experience[]` **every time**, never only when space allows. It is already condensed to a single line per role, so there is no relevance-based trimming to do here — unlike `experience[]` bullets or `projects[]`, this section is not competing for space against tailoring. Each line is pipe-delimited (`Title | Company | Location | Dates | Description`) specifically so title/company never has to be split on a comma heuristic — map segments positionally in that order, never by guessing from a comma or colon
-12. **Reorder ONLY the bullets within each `experience[]` entry, by JD relevance and by the risk map: strongest matching evidence first.** The entries themselves — which company is listed first, second, third — are NEVER reordered by relevance. `experience[]` stays in the exact reverse-chronological order it appears in `cv.md` (most recent role first), matching the Section order spec below. A hiring manager expects to read a resume top-to-bottom as a career timeline; shuffling companies by keyword-match score reads as random and undermines trust in the rest of the document. If you notice yourself reordering entries instead of bullets, that's the bug this note exists to prevent — stop and re-sort by date
+11. Select top 3-4 most relevant projects for the job. If `cv.md` carries an Awards / Honors section, populate `awards[]` with the entries that support this role — for an early-career candidate a contest medal or dean's list often outranks a thin project. Omit the key when there is nothing to list and the section disappears entirely; never invent an award to fill it
+12. Reorder experience bullets by JD relevance and by the risk map: strongest matching evidence first
 13. Build competency grid from JD requirements (6-8 keyword phrases), prioritizing `existing` and `supportedByResume` skills from Step 4 — never a `gap` skill
 14. Inject keywords naturally into existing achievements (NEVER invent)
 15. Apply the six-second clarity gate from `modes/heuristics/recruiter-side.md`: top third must make target role, strongest fit, and proof obvious
@@ -61,6 +61,7 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
 
 - Single-column layout (no sidebars, no parallel columns)
 - Standard headers: "Professional Summary", "Work Experience", "Education", "Skills", "Certifications", "Projects"
+- Optional sections (Core Competencies, Work Experience, Projects, Education, Certifications, Awards & Honors, Skills) are dropped entirely — header included — when their array is empty or absent
 - No text in images/SVGs
 - No critical info in PDF headers/footers (ATS ignores them)
 - UTF-8, selectable text (not rasterized)
@@ -91,11 +92,10 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
 1. Header (large name, gradient, contact, portfolio link)
 2. Professional Summary (3-4 lines, keyword-dense)
 3. Core Competencies (6-8 keyword phrases in flex-grid)
-4. Work Experience (reverse chronological — entries never reordered by relevance, see Step 12)
+4. Work Experience (reverse chronological)
 5. Projects (top 3-4 most relevant)
-6. Earlier Experience (condensed pre-cutoff roles, one line each — always included when `cv.md` has a `## Previous Experience` section)
-7. Education & Certifications
-8. Skills (languages + technical)
+6. Education & Certifications
+7. Skills (languages + technical)
 
 ## Keyword injection strategy (ethical, truth-based)
 
@@ -149,7 +149,6 @@ Write a JSON file with this structure, then run `node build-cv-html.mjs <input.j
     "competencies": "Core Competencies",
     "experience": "Work Experience",
     "projects": "Projects",
-    "earlier_experience": "Earlier Experience",
     "education": "Education",
     "certifications": "Certifications",
     "awards": "Awards & Honors",
@@ -167,10 +166,7 @@ Write a JSON file with this structure, then run `node build-cv-html.mjs <input.j
     }
   ],
   "projects": [
-    { "name": "Project Name", "badge": "Open Source", "tech": "Python, FastAPI", "description": "What it does." }
-  ],
-  "earlier_experience": [
-    { "role": "Job Title", "company": "Company Name", "location": "City, State", "dates": "2016 - 2018", "description": "One-line summary of scope, copied/condensed from cv.md's Previous Experience entry." }
+    { "name": "Project Name", "url": "https://github.com/...", "badge": "Open Source", "tech": "Python, FastAPI", "description": "What it does." }
   ],
   "education": [
     { "title": "B.S. Computer Science", "org": "University Name", "year": "2022", "description": "Optional line." }
@@ -204,17 +200,34 @@ Write a JSON file with this structure, then run `node build-cv-html.mjs <input.j
 | `candidate.photo` | string | Opt-in profile photo (#264): a local path or `data:` URL. Empty/absent emits **no `<img>`**, rendering pixel-for-pixel identical to the photoless layout (US/UK/many-market ATS penalize photos; opt in for DACH/European markets). |
 | `candidate.photo_style` | string | Optional photo framing: `rounded` (default), `circle`, or `square`. Read it from `candidate.photo_style` in `config/profile.yml`; invalid values fail before HTML is written. |
 | `sections` | object | Optional localized section titles; any omitted key falls back to the English default shown above. |
-| `summary` | string | Personalized summary with keywords. |
+| `summary` | string | Personalized summary with keywords. Supports `**…**` emphasis (see **Markdown bold** below). |
 | `competencies` | string[] | 6-8 keyword phrases → competency tags. |
-| `experience[]` | object | `company`, `role`, `location` (optional), `dates`, `bullets` (reordered, keyword-injected). Entry order is always reverse-chronological, matching `cv.md` — only the `bullets` within an entry are reordered by relevance, never the entries themselves (see Step 12). |
-| `projects[]` | object | `name`, `badge` (optional), `tech` (optional), `description` (a `bullets` array is also accepted and joined into the description line). |
-| `earlier_experience[]` | object | `role`, `company`, `location` (optional), `dates`, `description` (optional, one line, no bullets). Condensed pre-cutoff roles from `cv.md`'s `## Previous Experience` section, one pipe-delimited line each (`Title \| Company \| Location \| Dates \| Description`) — split positionally, not by comma/colon guessing. Optional section — omit the key or pass `[]` only when `cv.md` genuinely has no such section; when it does, include every entry every time (see Step 11), never trimmed for space or relevance. |
+| `experience[]` | object | `company`, `role`, `location` (optional), `dates`, `bullets` (reordered, keyword-injected; `**…**` emphasis supported). Optional section — omit the key or pass `[]` and the whole block is dropped, header included. Only for candidates with no professional history to list (students, new graduates, career changers); never drop it to hide a gap. |
+| `projects[]` | object | `name`, `url` (optional project/repo link), `badge` (optional), `tech` (optional), `description` (a `bullets` array is also accepted and joined into the description line). |
 | `education[]` | object | `title` (degree), `org` (institution), `year`, `description` (optional). |
 | `certifications[]` | object | `title`, `org`, `year`. |
 | `awards[]` | object | `title` (award name), `org` (issuing body, optional), `year` (optional). Optional section — omit the key or pass `[]` and the whole block is dropped, header included. Use it for competitive or academic distinctions (olympiad medals, hackathon wins, dean's list) that carry more signal than a thin experience section. |
 | `skills[]` | object | `category` + `items` (comma-separated string or string array). |
 
 `build-cv-html.mjs` errors out (non-zero exit) if any template placeholder is left unresolved, so a malformed payload fails loudly instead of shipping a broken CV. Run `node build-cv-html.mjs --test` for a self-test render.
+
+### Markdown bold
+
+Wrap a span in `**…**` to emphasise it — typically the quantified result a recruiter should catch in the six-second scan:
+
+```json
+"bullets": ["Cut p99 latency from 840 ms to **120 ms** across 14 services"]
+```
+
+`generate-pdf.mjs` converts it to `<strong>` during ATS normalization (#1728), and the template styles it in both the summary and job bullets. On the HTML path the conversion walks every text node, so **any** field can carry `**…**`.
+
+**The LaTeX twin is narrower — check `modes/latex.md` before reusing a payload across both.** `build-cv-latex.mjs` renders `**…**` as `\textbf{…}` (#3351) only in what it emits inside a `\resumeItem`: `experience[].bullets`, `projects[].bullets`, and the `education[].coursework` line. It has no `summary` field at all, and `projects[].name`, `awards[].title` and the `skills[]` fields print `**` literally. Bullets emphasise the same way in both formats; nothing else is guaranteed to.
+
+**The escaping runs first, and that order is the safety property.** `build-cv-html.mjs` owns the HTML escaping, and only the `**` markers it left untouched are reinterpreted afterwards — a literal `<script>` typed into a bullet stays escaped inside the bold span. Only `**`-delimited spans are affected; single asterisks and unmatched markers stay literal.
+
+**A bold span cannot contain a `*`.** `**tripled *3x* throughput**` matches nothing and ships the asterisks literally — no error, no warning. Rewrite it as `**tripled 3x throughput**` rather than nesting emphasis.
+
+Emphasis is not a substitute for evidence — bold reorders attention, it does not add claims. The no-fabrication rule applies to bolded text exactly as it does to the rest of the bullet, and bolding every other phrase emphasises nothing.
 
 ### Profile photo (opt-in, market-specific)
 
