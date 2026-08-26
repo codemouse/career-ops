@@ -250,10 +250,16 @@ html.theme-dark body.tab-manage {
   z-index: 10;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   padding: 16px 22px;
   border-bottom: 1px solid var(--topbar-border);
   background: var(--topbar-bg);
   backdrop-filter: blur(10px) saturate(1.1);
+}
+
+.topbar-actions {
+  flex: 0 0 auto;
 }
 
 .brand-lockup {
@@ -584,6 +590,11 @@ button.secondary:hover {
   align-items: end;
   margin: 8px 0 12px;
   flex-wrap: wrap;
+}
+
+.toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .pipeline-search {

@@ -33,6 +33,10 @@
         <p id="brandTagline" class="brand-tagline">Chaos-tested. Goblin-approved.</p>
       </div>
     </div>
+    <div class="actions topbar-actions">
+      <button id="themeToggleBtn" class="secondary theme-toggle-btn" type="button" aria-pressed="false">🌙 Dark</button>
+      <button id="refreshBtn">Refresh</button>
+    </div>
   </header>
 
   <main class="layout">
@@ -46,15 +50,6 @@
           <button id="reportsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="reportsPanel">Reports</button>
           <button id="evaluateTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="evaluatePanel">Evaluate</button>
           <button id="profileTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="profilePanel">Profile</button>
-        </div>
-        <div class="actions tab-actions">
-          <button id="themeToggleBtn" class="secondary theme-toggle-btn" type="button" aria-pressed="false">🌙 Dark</button>
-          <button id="refreshBtn">Refresh</button>
-          <button id="scanBtn">Run Scan</button>
-          <button id="enrichPendingBtn" class="secondary" type="button"
-            title="Backfill company/title/location for pending BuiltIn, FractionalJobs, Adzuna, and Glassdoor rows that still show a placeholder (LinkedIn needs its own login — see linkedin-login.mjs). Flags postings that turn out to be closed.">
-            Enrich Pending
-          </button>
         </div>
       </div>
 
@@ -97,6 +92,12 @@
               Show previously applied
             </label>
             <button id="clearAllFiltersBtn" class="secondary" type="button">Clear All Filters</button>
+            <span class="toolbar-spacer"></span>
+            <button id="scanBtn">Run Scan</button>
+            <button id="enrichPendingBtn" class="secondary" type="button"
+              title="Backfill company/title/location for pending BuiltIn, FractionalJobs, Adzuna, and Glassdoor rows that still show a placeholder (LinkedIn needs its own login — see linkedin-login.mjs). Flags postings that turn out to be closed.">
+              Enrich Pending
+            </button>
             <button id="addToPipelineBtn" type="button">+ Add Job</button>
           </div>
           <div id="pendingSummary" class="chips">

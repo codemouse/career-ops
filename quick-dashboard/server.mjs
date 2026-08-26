@@ -304,6 +304,8 @@ function readScanHistoryAddedAtByUrl() {
     const addedAt = String(cols[12] || '').trim() || firstSeen;
     if (!addedAt) continue;
     if (!byUrl[url]) byUrl[url] = addedAt;
+    const normalized = normalizeUrlForMatch(normalizeLinkedInJobUrl(url));
+    if (!byUrl[normalized]) byUrl[normalized] = addedAt;
   }
 
   return byUrl;
@@ -312,7 +314,11 @@ function readScanHistoryAddedAtByUrl() {
 function attachPipelineAddedAt(item, addedAtByUrl) {
   const rawUrl = String(item?.originalUrl || item?.url || '').trim();
   const normalizedUrl = String(item?.url || '').trim();
-  const addedAt = addedAtByUrl[rawUrl] || addedAtByUrl[normalizedUrl] || '';
+  const addedAt = addedAtByUrl[rawUrl]
+    || addedAtByUrl[normalizedUrl]
+    || addedAtByUrl[normalizeUrlForMatch(rawUrl)]
+    || addedAtByUrl[normalizeUrlForMatch(normalizedUrl)]
+    || '';
   return { ...item, addedAt };
 }
 
