@@ -46,11 +46,12 @@ import { stripEmptySections } from '../cv-sections-core.mjs';
 
 console.log('\ncv-sections-core.mjs — optional sections leave no bare header');
 
-const EMPTY = { competencies: [], experience: [], projects: [], education: [], certifications: [], awards: [], interests: [], skills: [] };
+const EMPTY = { competencies: [], experience: [], projects: [], earlier_experience: [], education: [], certifications: [], awards: [], interests: [], skills: [] };
 const FULL = {
   competencies: ['Tag'],
   experience: [{ company: 'E' }],
   projects: [{ name: 'P' }],
+  earlier_experience: [{ role: 'R', company: 'C' }],
   education: [{ degree: 'D' }],
   certifications: [{ title: 'C' }],
   awards: [{ title: 'A' }],
@@ -70,15 +71,15 @@ function check(label, actual, expected) {
 // are empty — the `<!-- END -->` / `%%%% END %%%%` marker itself, never the
 // (now-strippable) SKILLS marker or its content.
 const TEMPLATES = [
-  { file: 'templates/cv-template.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: true },
-  { file: 'templates/resume-template.html', format: 'html', after: '<!-- END -->', hasCertifications: false, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.zh-minimal.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.compact.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.executive.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.jake.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.leadership.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.modern.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false },
-  { file: 'templates/cv-template.tex', format: 'tex', after: '%%%%  END  %%%%', hasCertifications: false, hasCompetencies: false, hasInterests: false },
+  { file: 'templates/cv-template.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: true, hasEarlierExperience: true },
+  { file: 'templates/resume-template.html', format: 'html', after: '<!-- END -->', hasCertifications: false, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.zh-minimal.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.compact.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.executive.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.jake.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.leadership.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.modern.html', format: 'html', after: '<!-- END -->', hasCertifications: true, hasCompetencies: true, hasInterests: false, hasEarlierExperience: false },
+  { file: 'templates/cv-template.tex', format: 'tex', after: '%%%%  END  %%%%', hasCertifications: false, hasCompetencies: false, hasInterests: false, hasEarlierExperience: false },
 ];
 
 // --- Coverage guard: no shipped CV template may sit outside the matrix ------
@@ -111,7 +112,7 @@ else fail(`shipped CV templates missing from TEMPLATES — they run zero asserti
 if (phantom.length === 0) pass('every template in the matrix exists on disk');
 else fail(`TEMPLATES names templates that are not on disk: ${phantom.join(', ')}`);
 
-for (const { file, format, after, hasCertifications, hasCompetencies, hasInterests } of TEMPLATES) {
+for (const { file, format, after, hasCertifications, hasCompetencies, hasInterests, hasEarlierExperience } of TEMPLATES) {
   const template = readFileSync(join(ROOT, file), 'utf-8');
   const name = file.split('/').pop();
   const closingSkeleton = format === 'html' ? '</body>\n</html>' : '\\end{document}';
@@ -123,6 +124,7 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
   const competenciesMarker = '<!-- CORE COMPETENCIES -->'; // html-only; no LaTeX Competencies section exists
   const awardsMarker = format === 'html' ? '<!-- AWARDS -->' : 'AWARDS  %';
   const interestsMarker = '<!-- INTERESTS -->'; // html-only; no LaTeX Interests section exists
+  const earlierExperienceMarker = '<!-- EARLIER EXPERIENCE -->'; // html-only; no LaTeX Earlier Experience section exists
   const skillsMarker = format === 'html' ? '<!-- SKILLS -->' : 'Technical Skills  %';
   // The LaTeX banner reads "Experience" while its \section reads "Work
   // Experience"; the HTML marker is "WORK EXPERIENCE". They are not the same
@@ -141,6 +143,9 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
   check(`${name}: empty payload removes the awards block`, stripped.includes(awardsMarker), false);
   if (hasInterests) {
     check(`${name}: empty payload removes the interests block`, stripped.includes(interestsMarker), false);
+  }
+  if (hasEarlierExperience) {
+    check(`${name}: empty payload removes the earlier-experience block`, stripped.includes(earlierExperienceMarker), false);
   }
   check(`${name}: empty payload removes the skills block`, stripped.includes(skillsMarker), false);
   check(`${name}: empty payload removes the work-experience block`, stripped.includes(experienceMarker), false);
@@ -189,6 +194,9 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
   if (hasInterests) {
     check(`${name}: empty awards alone keeps interests`, onlyAwards.includes(interestsMarker), true);
   }
+  if (hasEarlierExperience) {
+    check(`${name}: empty awards alone keeps earlier experience`, onlyAwards.includes(earlierExperienceMarker), true);
+  }
 
   // Interests empty on its own: it sits directly between Awards and Skills
   // (the last section), so a boundary slip here is the one most likely to eat
@@ -209,6 +217,28 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
     check(`${name}: omitted interests key keeps skills`, omittedInterests.includes(skillsMarker), true);
     check(`${name}: omitted interests key keeps the closing document skeleton`,
       omittedInterests.trimEnd().endsWith(closingSkeleton), true);
+  }
+
+  // Earlier experience empty on its own: it sits between Projects and
+  // Education, so a boundary slip here is the one most likely to eat into
+  // Education or the sections after it — assert both survive.
+  if (hasEarlierExperience) {
+    const onlyEarlierExperience = stripEmptySections(template, { ...FULL, earlier_experience: [] }, format);
+    check(`${name}: empty earlier experience alone keeps projects`, onlyEarlierExperience.includes(projectsMarker), true);
+    check(`${name}: empty earlier experience alone drops earlier experience`, onlyEarlierExperience.includes(earlierExperienceMarker), false);
+    check(`${name}: empty earlier experience alone keeps education`, onlyEarlierExperience.includes(educationMarker), true);
+    check(`${name}: empty earlier experience alone keeps skills`, onlyEarlierExperience.includes(skillsMarker), true);
+    check(`${name}: empty earlier experience alone keeps the closing document skeleton`,
+      onlyEarlierExperience.trimEnd().endsWith(closingSkeleton), true);
+
+    // Omitted `earlier_experience` key must behave identically to an explicit [].
+    const withoutEarlierExperience = { ...FULL };
+    delete withoutEarlierExperience.earlier_experience;
+    const omittedEarlierExperience = stripEmptySections(template, withoutEarlierExperience, format);
+    check(`${name}: omitted earlier experience key removes the earlier-experience block`, omittedEarlierExperience.includes(earlierExperienceMarker), false);
+    check(`${name}: omitted earlier experience key keeps skills`, omittedEarlierExperience.includes(skillsMarker), true);
+    check(`${name}: omitted earlier experience key keeps the closing document skeleton`,
+      omittedEarlierExperience.trimEnd().endsWith(closingSkeleton), true);
   }
 
   // Competencies empty on its own: it is first among the optional sections,
@@ -302,6 +332,9 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
     check(`${name}: empty interests+skills keeps awards`, bothEmpty.includes(awardsMarker), true);
     check(`${name}: empty interests+skills keeps the closing document skeleton`,
       bothEmpty.trimEnd().endsWith(closingSkeleton), true);
+  }
+  if (hasEarlierExperience) {
+    check(`${name}: empty skills alone keeps earlier experience`, onlySkills.includes(earlierExperienceMarker), true);
   }
 
   // An omitted `skills` key must behave identically to an explicit empty

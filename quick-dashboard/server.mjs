@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { resolve, dirname, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { cell, resolvePdfIndexPath } from '../tracker-utils.mjs';
 import { parsePdfIndex } from '../find.mjs';
 
@@ -146,6 +146,14 @@ function handleApi(req, res, path) {
     });
   }
 
+  if (req.method === 'POST' && path === '/api/fit-filters/update') {
+    return readBody(req, res, ({ id, rule }) => {
+      if (!id || typeof id !== 'string') return json(res, 400, { error: 'id is required' });
+      const result = updateFitFilterRule(id, rule);
+      return json(res, result.ok ? 200 : 400, result);
+    });
+  }
+
   if (req.method === 'GET' && path === '/api/spend-tier') {
     return json(res, 200, { tier: readSpendTier() });
   }
@@ -206,11 +214,17 @@ function handleApi(req, res, path) {
   }
 
   if (req.method === 'POST' && path === '/api/reports/pdf-on-demand') {
-    return readBody(req, res, async ({ company }) => {
+    return readBody(req, res, async ({ company, reportSlug }) => {
       const targetCompany = String(company || '').trim();
       if (!targetCompany) return json(res, 400, { error: 'company is required' });
-      const result = await runCareerOpsPdfOnDemand(targetCompany);
-      return json(res, result.status === 0 ? 200 : 500, result);
+      const reportNumber = reportNumberFromSlug(reportSlug);
+      const result = await runCareerOpsPdfOnDemand(targetCompany, reportNumber);
+      if (result.status === 0 && result.pdfWritten) return json(res, 200, result);
+      // Exit 0 with no PDF written usually means the agent asked a clarifying
+      // question instead of generating (see runCareerOpsPdfOnDemand) — that
+      // text lands in stdout, not stderr, so surface it as the error the
+      // dashboard displays instead of a bare "Request failed (500)".
+      return json(res, 500, { ...result, error: result.stderr || result.stdout || 'No PDF file was written.' });
     });
   }
 
@@ -664,6 +678,8 @@ function parsePipelineItem(line) {
   parsed.employmentType = inferEmploymentType(parsed);
   parsed.score = scoreFromReportUrl(url);
   parsed.reportFilename = reportFilenameFromUrl(url);
+  const pdfPath = parsed.reportFilename ? pdfPathForReport(reportNumberFromSlug(parsed.reportFilename)) : '';
+  parsed.pdfFilename = pdfPath ? basename(pdfPath) : '';
   const trust = parseTrustSegment(labeled.trust || '');
   parsed.trustScore = trust.score;
   parsed.trustFlags = trust.flags;
@@ -1343,6 +1359,25 @@ function removeFitFilterRule(id) {
   return { ok: true, removed: current.length - next.length };
 }
 
+// Edits an existing rule in place: re-sanitizes the incoming fields through
+// the same validation addFitFilterRule uses (so an edit can't save a rule
+// with no filter scope at all), but keeps the original id/createdAt rather
+// than minting a new rule — the point is to correct a mistake, not replace
+// the row with a lookalike that breaks anything referencing the old id.
+function updateFitFilterRule(id, ruleInput) {
+  const current = readFitFilters();
+  const existing = current.find((r) => r && r.id === id);
+  if (!existing) return { ok: false, error: 'rule not found' };
+
+  const sanitized = sanitizeFitFilterRule({ ...existing, ...ruleInput });
+  if (!sanitized) return { ok: false, error: 'invalid reject rule' };
+
+  const merged = { ...sanitized, id: existing.id, createdAt: existing.createdAt };
+  const next = current.map((r) => (r && r.id === id ? merged : r));
+  writeFitFilters(next);
+  return { ok: true, rule: merged };
+}
+
 function sanitizeFitFilterRule(ruleInput) {
   if (!ruleInput || typeof ruleInput !== 'object') return null;
 
@@ -1472,14 +1507,54 @@ function runNode(args) {
   };
 }
 
+// Report filenames are `{NNN}-{company-slug}-{YYYY-MM-DD}.md` (see
+// peekReportMeta above for the same regex). Used to turn a Reports-tab
+// selection into an unambiguous report number for runCareerOpsPdfOnDemand,
+// instead of a fuzzy company name that can match multiple tracker rows.
+function reportNumberFromSlug(slug) {
+  const m = String(slug || '').match(/^(\d+)-/);
+  return m ? m[1] : '';
+}
+
+function pdfPathForReport(reportNumber) {
+  if (!reportNumber) return '';
+  const index = readPdfIndexMap();
+  return index.get(String(reportNumber).replace(/^0+(?=\d)/, '')) || '';
+}
+
 // Runs the headless PDF pipeline via async spawn (not spawnSync): this call
 // can take minutes (LLM + Playwright), and spawnSync would block Node's
 // single-threaded event loop for the whole server, freezing every other
 // endpoint (including /api/reports) until it exits.
-function runCareerOpsPdfOnDemand(company) {
+//
+// `/career-ops pdf` is written as an interactive mode: it asks the user for
+// the JD, disambiguates a company with multiple tracker rows, and confirms
+// before regenerating an existing PDF (modes/pdf.md Step 2 and the "PDF
+// already exists" checkpoint). Headless `claude -p` has no way to answer any
+// of that — Claude just prints the question as its final turn and exits 0
+// having written nothing. Passing an exact report number (resolved via
+// find.mjs) and telling it explicitly to regenerate without asking removes
+// every branch that would otherwise stall on a question nobody can answer.
+// Exit code 0 alone doesn't prove a PDF was written (that silent-question
+// case also exits 0), so the caller must additionally confirm the PDF's
+// mtime advanced — see pdfWritten below.
+function runCareerOpsPdfOnDemand(company, reportNumber) {
   const claudePath = resolve(process.env.HOME || '', '.local', 'bin', 'claude');
   const claude = existsSync(claudePath) ? claudePath : 'claude';
-  const command = `Run /career-ops pdf ${company}`;
+  // "force full regenerate" matters, not just phrasing: modes/pdf.md's normal
+  // reuse-vs-regenerate check (jd:similarity) is correct default behavior for
+  // an unattended re-run, but it means an on-demand click meant to pick up a
+  // template/pipeline fix can silently reuse the stale HTML the bug is
+  // baked into, re-running only generate-pdf.mjs on unchanged content — see
+  // career-ops#3287, where this produced a "fixed" PDF that had not actually
+  // regenerated. A manual click here always means "rebuild it now."
+  const command = reportNumber
+    ? `Run /career-ops pdf for report #${reportNumber} (${company}). Force a full regenerate — rebuild the HTML from cv.md via build-cv-html.mjs from scratch, do not reuse or patch the existing output HTML — and do not ask any clarifying questions. Reuse the report's own JD/context, and overwrite the existing PDF.`
+    : `Run /career-ops pdf ${company}. Force a full regenerate — rebuild the HTML from cv.md via build-cv-html.mjs from scratch, do not reuse or patch existing output HTML — and do not ask any clarifying questions. Overwrite the existing PDF.`;
+
+  const pdfPath = pdfPathForReport(reportNumber);
+  const pdfAbsPath = pdfPath ? resolve(root, pdfPath) : '';
+  const mtimeBefore = pdfAbsPath && existsSync(pdfAbsPath) ? statSync(pdfAbsPath).mtimeMs : 0;
 
   return new Promise((resolvePromise) => {
     const child = spawn(
@@ -1503,14 +1578,27 @@ function runCareerOpsPdfOnDemand(company) {
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', (err) => {
-      resolvePromise({ status: 1, stdout: stdout.trim(), stderr: String(err?.message || err), command });
+      resolvePromise({ status: 1, stdout: stdout.trim(), stderr: String(err?.message || err), command, pdfWritten: false });
     });
     child.on('close', (code) => {
+      // Always re-resolve from pdf-index.tsv after the run, never reuse the
+      // pre-run path: a same-day regeneration overwrites it in place (mtime
+      // advances, path unchanged), but a regeneration on a later calendar day
+      // writes a *new* dated filename and repoints the index at it — reusing
+      // pdfAbsPath here would keep checking the old, now-stale file and never
+      // see it change. A first-ever generation for this report has no prior
+      // pdf-index.tsv entry at all, which this also covers (pdfAbsPath empty).
+      const freshPdfPath = pdfPathForReport(reportNumber);
+      const pdfPathAfter = freshPdfPath ? resolve(root, freshPdfPath) : '';
+      const pathChanged = pdfPathAfter && pdfPathAfter !== pdfAbsPath;
+      const mtimeAfter = pdfPathAfter && existsSync(pdfPathAfter) ? statSync(pdfPathAfter).mtimeMs : 0;
+      const pdfWritten = mtimeAfter > 0 && (pathChanged || mtimeAfter !== mtimeBefore);
       resolvePromise({
         status: Number.isInteger(code) ? code : 1,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
         command,
+        pdfWritten,
       });
     });
   });
@@ -1752,11 +1840,11 @@ function reportUrlIndex() {
     try {
       const lines = readFileSync(resolve(dir, filename), 'utf8').split('\n').slice(0, 15);
       const urlLine = lines.find((l) => l.startsWith('**URL:**'));
-      const companyLine = lines.find((l) => l.startsWith('# Evaluation:'));
+      const companyLine = lines.find((l) => /^# Evaluation( Report)?:/.test(l));
       const scoreLine = lines.find((l) => l.startsWith('**Score:**'));
       if (!urlLine || !companyLine) continue;
       const reportUrl = urlLine.replace('**URL:**', '').trim();
-      const company = (companyLine.replace('# Evaluation:', '').trim().split('—')[0] || '').trim();
+      const company = (companyLine.replace(/^# Evaluation( Report)?:/, '').trim().split('—')[0] || '').trim();
       const score = scoreLine ? scoreLine.replace('**Score:**', '').trim() : '';
       if (reportUrl && company) index.set(normalizeUrlForMatch(reportUrl), { company, filename, score });
     } catch { /* skip unreadable report */ }
@@ -1812,12 +1900,12 @@ function peekReportMeta(dir, filename) {
     const content = readFileSync(resolve(dir, filename), 'utf8');
     const lines = content.split('\n').slice(0, 30);
     const scoreLine = lines.find((l) => l.startsWith('**Score:**'));
-    const companyLine = lines.find((l) => l.startsWith('# Evaluation:'));
+    const companyLine = lines.find((l) => /^# Evaluation( Report)?:/.test(l));
     const legitimacyLine = lines.find((l) => l.startsWith('**Legitimacy:**'));
     const urlLine = lines.find((l) => l.startsWith('**URL:**'));
     if (scoreLine) score = scoreLine.replace('**Score:**', '').trim();
     if (companyLine) {
-      const parts = companyLine.replace('# Evaluation:', '').trim().split('—');
+      const parts = companyLine.replace(/^# Evaluation( Report)?:/, '').trim().split('—');
       company = (parts[0] || '').trim();
       role = (parts[1] || '').trim();
     }
@@ -1834,6 +1922,17 @@ function peekReportMeta(dir, filename) {
         const doc = yaml.load(fenceMatch[1]) || {};
         if (doc.location) location = String(doc.location).trim();
         if (doc.posted_date) postedDate = String(doc.posted_date).trim();
+        // Fallback only — a conforming report always has **Score:**/
+        // **Legitimacy:** header lines (AGENTS.md), so these only fire for a
+        // malformed report missing them (career-ops#3312: report 1097 had no
+        // header line at all, so the dashboard showed a bare "Report" chip
+        // instead of the real score). Keyed off the canonical Machine
+        // Summary field names from batch/batch-prompt.md's schema (`score`,
+        // `legitimacy_tier`) — not a same-meaning-but-nonstandard field name
+        // a different malformed report might use instead, which this can't
+        // guard against and shouldn't try to enumerate.
+        if (!score && doc.score !== undefined && doc.score !== null) score = `${doc.score}/5`;
+        if (!legitimacy && doc.legitimacy_tier) legitimacy = String(doc.legitimacy_tier).trim();
       } catch { /* malformed YAML in an older/hand-edited report — leave both blank */ }
     }
   } catch { /* ignore */ }

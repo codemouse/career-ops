@@ -45,6 +45,7 @@
         <div class="tab-buttons" role="tablist" aria-label="Dashboard Views">
           <button id="startTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="startPanel">Start Here</button>
           <button id="pipelineTabBtn" class="tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="pipelinePanel">Pending Pipeline</button>
+          <button id="rulesTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="rulesPanel">Fit Rules</button>
           <button id="manageTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="managePanel">Tracker + Status</button>
           <button id="analyticsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="analyticsPanel">Analytics</button>
           <button id="reportsTabBtn" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="reportsPanel">Reports</button>
@@ -83,14 +84,6 @@
               Type
               <select id="typeFilterSelect"></select>
             </label>
-            <label class="pipeline-toggle">
-              <input type="checkbox" id="showHiddenToggle" />
-              Show hidden jobs<span id="hiddenJobsCount" class="hidden-count"></span>
-            </label>
-            <label class="pipeline-toggle">
-              <input type="checkbox" id="showPriorAppliedToggle" />
-              Show previously applied
-            </label>
             <button id="clearAllFiltersBtn" class="secondary" type="button">Clear All Filters</button>
             <span class="toolbar-spacer"></span>
             <button id="scanBtn">Run Scan</button>
@@ -109,13 +102,13 @@
               <thead>
                 <tr>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="source">Source</button></th>
-                  <th scope="col"><button class="sort-btn" type="button" data-sort-key="added">Added</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="company">Company</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="role">Title</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="employmentType">Type</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="location">Location</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="posted">Posted</button></th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="score">Score</button></th>
+                  <th scope="col">Resume</th>
                   <th scope="col"><button class="sort-btn" type="button" data-sort-key="flags">Flags</button></th>
                   <th scope="col" class="actions-col">Actions</th>
                 </tr>
@@ -194,32 +187,50 @@
       </div>
 
       <div id="analyticsPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="analyticsTabBtn">
-        <section class="card">
-          <h2 class="section-title">Pipeline Funnel</h2>
-          <div id="funnelChart" class="chart-wrap"></div>
-        </section>
-        <section class="card">
-          <h2 class="section-title">Score Distribution</h2>
-          <div id="scoreChart" class="chart-wrap"></div>
-        </section>
-        <section class="card">
-          <h2 class="section-title">Top Companies by Score</h2>
-          <div id="topCompaniesChart" class="chart-wrap"></div>
-        </section>
+        <div class="analytics-grid">
+          <section class="card analytics-card-wide">
+            <h2 class="section-title">Pipeline Funnel</h2>
+            <div id="funnelChart" class="chart-wrap"></div>
+          </section>
+          <section class="card">
+            <h2 class="section-title">Posting Legitimacy</h2>
+            <div id="legitimacyChart" class="chart-wrap"></div>
+          </section>
+          <section class="card">
+            <h2 class="section-title">Score Distribution</h2>
+            <div id="scoreChart" class="chart-wrap"></div>
+          </section>
+          <section class="card">
+            <h2 class="section-title">Pending Pipeline by Source</h2>
+            <div id="sourceChart" class="chart-wrap"></div>
+          </section>
+          <section class="card analytics-card-wide">
+            <h2 class="section-title">Applications Over Time</h2>
+            <div id="timeSeriesChart" class="chart-wrap"></div>
+          </section>
+          <section class="card analytics-card-wide">
+            <h2 class="section-title">Top Companies by Score</h2>
+            <div id="topCompaniesChart" class="chart-wrap"></div>
+          </section>
+        </div>
       </div>
 
       <div id="reportsPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="reportsTabBtn">
         <section class="card reports-layout">
           <div class="reports-list-col">
             <h2 class="section-title">Evaluation Reports<span id="reportsCount" class="reports-count"></span></h2>
+            <input id="reportsSearchInput" class="reports-search-input" type="search" placeholder="Search company, role, report #" />
             <div id="reportsList" class="reports-list"></div>
           </div>
           <div class="reports-viewer-col">
             <div class="reports-toolbar">
-              <button id="reportsGeneratePdfBtn" type="button" class="secondary" disabled>Create PDF On Demand</button>
+              <button id="reportsGeneratePdfBtn" type="button" class="secondary" disabled>Create Resume On Demand</button>
               <a id="reportsDownloadResumeLink" class="report-download-link is-hidden" href="#" target="_blank" rel="noopener">⬇ Download Resume</a>
-              <span id="reportsToolbarMeta" class="muted-cell">Select a report to enable PDF generation.</span>
+              <button id="reportsOpenPipelineBtn" type="button" class="secondary is-hidden">Open in Pipeline</button>
+              <button id="reportsOpenTrackerBtn" type="button" class="secondary is-hidden">Open in Tracker</button>
+              <span id="reportsToolbarMeta" class="muted-cell">Select a report to enable resume generation.</span>
             </div>
+            <div id="pdfJobsList" class="pdf-jobs-list"></div>
             <div id="reportsViewer" class="reports-viewer">
               <p class="reports-empty-hint">Select a report to read it.</p>
             </div>
@@ -262,6 +273,41 @@
         </section>
       </div>
 
+      <div id="rulesPanel" class="tab-panel is-hidden" role="tabpanel" aria-labelledby="rulesTabBtn">
+        <section class="card">
+          <h2 class="section-title">Auto-Exclude Rules<span id="rulesCount" class="reports-count"></span></h2>
+          <p class="section-sub">Rules taught from "Reject + Save Filters" on the Pending Pipeline tab. A pending row matching any rule below is hidden by default (see the "Hidden: N" pill on that tab).</p>
+          <div class="pipeline-toolbar">
+            <label class="pipeline-search">
+              Search
+              <input id="rulesSearchInput" placeholder="Search company, source, keywords" />
+            </label>
+            <label class="pipeline-filter">
+              Reason
+              <select id="rulesReasonFilterSelect"></select>
+            </label>
+            <button id="rulesClearFiltersBtn" class="secondary" type="button">Clear All Filters</button>
+          </div>
+          <div class="table-wrap pipeline-table-wrap">
+            <table id="rulesTable" class="pipeline-table">
+              <thead>
+                <tr>
+                  <th scope="col"><button class="sort-btn" type="button" data-rules-sort-key="reasonLabel">Reason</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-rules-sort-key="company">Company</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-rules-sort-key="source">Source</button></th>
+                  <th scope="col"><button class="sort-btn" type="button" data-rules-sort-key="employmentType">Type</button></th>
+                  <th scope="col">Role keywords</th>
+                  <th scope="col">Location keywords</th>
+                  <th scope="col"><button class="sort-btn" type="button" data-rules-sort-key="createdAt">Created</button></th>
+                  <th scope="col" class="actions-col">Actions</th>
+                </tr>
+              </thead>
+              <tbody><tr><td colspan="8" class="empty-state">Loading rules…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
     </section>
   </main>
 
@@ -298,6 +344,54 @@
       <div class="actions reject-actions">
         <button type="button" id="rejectCancelBtn" class="secondary">Cancel</button>
         <button type="submit" id="rejectConfirmBtn">Reject + Save Filters</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="ruleEditModal" class="reject-modal">
+    <form id="ruleEditForm" class="reject-form">
+      <h3>Edit Rule</h3>
+      <p class="reject-subtitle">Change what this rule excludes. Leave a field blank to drop that condition.</p>
+
+      <label>
+        Reason
+        <select id="ruleEditReasonSelect" required></select>
+      </label>
+
+      <label>
+        Company
+        <input id="ruleEditCompany" placeholder="e.g. Acme Corp" autocomplete="off" />
+      </label>
+
+      <label>
+        Source
+        <input id="ruleEditSource" placeholder="e.g. LinkedIn" autocomplete="off" />
+      </label>
+
+      <label>
+        Employment type
+        <select id="ruleEditType">
+          <option value="">Any</option>
+          <option value="full-time">full-time</option>
+          <option value="fractional">fractional</option>
+        </select>
+      </label>
+
+      <label>
+        Role keywords to exclude (comma-separated)
+        <input id="ruleEditRoleKeywords" placeholder="e.g. head of sales, sales director" />
+      </label>
+
+      <label>
+        Location keywords to exclude (comma-separated)
+        <input id="ruleEditLocationKeywords" placeholder="e.g. onsite, berlin" />
+      </label>
+
+      <div id="ruleEditPreview" class="reject-preview"></div>
+
+      <div class="actions reject-actions">
+        <button type="button" id="ruleEditCancelBtn" class="secondary">Cancel</button>
+        <button type="submit" id="ruleEditSaveBtn">Save Changes</button>
       </div>
     </form>
   </dialog>

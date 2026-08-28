@@ -316,6 +316,58 @@
     line-height: 1.5;
   }
 
+  /* === EARLIER EXPERIENCE === */
+  /* Condensed pre-cutoff career history: one compact block per role, no
+     bullets — denser than a .job entry since it's lower-priority than Work
+     Experience but still needs room for a one-line description. */
+  .earlier-item {
+    margin-bottom: 8px;
+  }
+
+  .earlier-item:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Company and role sit on separate block-level lines — same reasoning as
+     .job-header / .job-role above (see that comment). A rendered PDF has no
+     DOM: two spans on one line with only a CSS-generated separator between
+     them still flatten to a single continuous text run in the PDF's text
+     layer, which is exactly what broke Workday's Job Title/Company autofill
+     (career-ops#3287) even after the two fields were split into separate
+     elements — the fix that actually holds is a real line break, not a
+     structural-but-same-line split. */
+  .earlier-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+  }
+
+  .earlier-company {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #333;
+  }
+
+  .earlier-role {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #333;
+  }
+
+  .earlier-meta {
+    font-size: 10px;
+    color: #777;
+    white-space: nowrap;
+  }
+
+  .earlier-desc {
+    font-size: 10px;
+    color: #666;
+    line-height: 1.4;
+    margin-top: 1px;
+  }
+
   /* === CERTIFICATIONS === */
   .cert-table {
     display: table;
@@ -680,6 +732,12 @@
   <div class="section">
     <div class="section-title">{{SECTION_PROJECTS}}</div>
     {{PROJECTS}}
+  </div>
+
+  <!-- EARLIER EXPERIENCE -->
+  <div class="section">
+    <div class="section-title">{{SECTION_EARLIER_EXPERIENCE}}</div>
+    {{EARLIER_EXPERIENCE}}
   </div>
 
   <!-- EDUCATION -->

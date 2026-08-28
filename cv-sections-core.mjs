@@ -113,6 +113,7 @@ const PATTERNS = {
     competencies: new RegExp(String.raw`<!--\s+CORE COMPETENCIES\s+-->[\s\S]*?` + HTML_BOUNDARY),
     experience: new RegExp(String.raw`<!--\s+WORK EXPERIENCE\s+-->[\s\S]*?` + HTML_BOUNDARY),
     projects: new RegExp(String.raw`<!--\s+PROJECTS\s+-->[\s\S]*?` + HTML_BOUNDARY),
+    earlier_experience: new RegExp(String.raw`<!--\s+EARLIER EXPERIENCE\s+-->[\s\S]*?` + HTML_BOUNDARY),
     education: new RegExp(String.raw`<!--\s+EDUCATION\s+-->[\s\S]*?` + HTML_BOUNDARY),
     certifications: new RegExp(String.raw`<!--\s+CERTIFICATIONS\s+-->[\s\S]*?` + HTML_BOUNDARY),
     awards: new RegExp(String.raw`<!--\s+AWARDS\s+-->[\s\S]*?` + HTML_BOUNDARY),
@@ -130,7 +131,10 @@ const PATTERNS = {
   },
 };
 
-export const OPTIONAL_SECTIONS = ['competencies', 'experience', 'projects', 'education', 'certifications', 'awards', 'interests', 'skills'];
+// earlier_experience (#pdf-order-and-earlier-experience): condensed pre-cutoff
+// career history — cv.md's own "## Previous Experience" section, one line per
+// role, no bullets. html-only for now (no LaTeX marker), same as competencies.
+export const OPTIONAL_SECTIONS = ['competencies', 'experience', 'projects', 'earlier_experience', 'education', 'certifications', 'awards', 'interests', 'skills'];
 
 export function isEmptySection(payload, section) {
   const entries = payload?.[section];

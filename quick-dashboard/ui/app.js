@@ -9,7 +9,6 @@ const trackerFlagsFilterSelect = document.getElementById('trackerFlagsFilterSele
 const trackerClearFiltersBtn = document.getElementById('trackerClearFiltersBtn');
 const pipelineSearchInput = document.getElementById('pipelineSearchInput');
 const pendingSummary = document.getElementById('pendingSummary');
-const hiddenJobsCount = document.getElementById('hiddenJobsCount');
 const pendingTable = document.getElementById('pendingTable');
 const pendingTableBody = document.querySelector('#pendingTable tbody');
 const opsChecklist = document.getElementById('opsChecklist');
@@ -27,6 +26,9 @@ const evaluateTabBtn = document.getElementById('evaluateTabBtn');
 const reportsGeneratePdfBtn = document.getElementById('reportsGeneratePdfBtn');
 const reportsDownloadResumeLink = document.getElementById('reportsDownloadResumeLink');
 const reportsToolbarMeta = document.getElementById('reportsToolbarMeta');
+const reportsSearchInput = document.getElementById('reportsSearchInput');
+const reportsOpenPipelineBtn = document.getElementById('reportsOpenPipelineBtn');
+const reportsOpenTrackerBtn = document.getElementById('reportsOpenTrackerBtn');
 const startPanel = document.getElementById('startPanel');
 const pipelinePanel = document.getElementById('pipelinePanel');
 const managePanel = document.getElementById('managePanel');
@@ -38,6 +40,8 @@ const scanBtn = document.getElementById('scanBtn');
 const enrichPendingBtn = document.getElementById('enrichPendingBtn');
 const profileTabBtn = document.getElementById('profileTabBtn');
 const profilePanel = document.getElementById('profilePanel');
+const rulesTabBtn = document.getElementById('rulesTabBtn');
+const rulesPanel = document.getElementById('rulesPanel');
 const dashboardTitle = document.getElementById('dashboardTitle');
 const brandTagline = document.getElementById('brandTagline');
 const toastRack = document.getElementById('toastRack');
@@ -47,8 +51,6 @@ const statusForm = document.getElementById('statusForm');
 const statusOutput = document.getElementById('statusOutput');
 const sourceFilterSelect = document.getElementById('sourceFilterSelect');
 const typeFilterSelect = document.getElementById('typeFilterSelect');
-const showHiddenToggle = document.getElementById('showHiddenToggle');
-const showPriorAppliedToggle = document.getElementById('showPriorAppliedToggle');
 const clearAllFiltersBtn = document.getElementById('clearAllFiltersBtn');
 const rejectModal = document.getElementById('rejectModal');
 const rejectForm = document.getElementById('rejectForm');
@@ -76,7 +78,7 @@ const pipelineState = {
   processed: [],
   fitFilters: [],
   priorAppliedByCompany: {},
-  sortKey: 'added',
+  sortKey: 'posted',
   sortDir: 'desc',
   query: '',
   hintIndex: 0,
@@ -91,6 +93,13 @@ const trackerState = {
   availableStates: [], // populated by loadStates(); canonical labels from templates/states.yml
   query: '',
   flagsFilter: 'all', // 'all' | 'none' | an exact legitimacy tier (e.g. 'Suspicious')
+};
+
+const rulesState = {
+  sortKey: 'createdAt',
+  sortDir: 'desc',
+  query: '',
+  reasonFilter: 'all', // 'all' | an exact reasonId
 };
 
 // Manually re-running an evaluation to Evaluated is a real process (oferta/
@@ -114,7 +123,9 @@ const evaluateState = {
 const reportsState = {
   items: [],
   selectedSlug: '',
-  pdfRunning: false,
+  query: '',
+  pdfJobs: [],
+  pdfJobsNextId: 1,
 };
 
 const whimsyState = {
@@ -170,6 +181,7 @@ analyticsTabBtn?.addEventListener('click', () => setActiveTab('analytics'));
 reportsTabBtn?.addEventListener('click', () => { setActiveTab('reports'); loadReports(); });
 evaluateTabBtn?.addEventListener('click', () => setActiveTab('evaluate'));
 profileTabBtn?.addEventListener('click', () => { setActiveTab('profile'); loadProfile(); });
+rulesTabBtn?.addEventListener('click', () => setActiveTab('rules'));
 baselineRefreshBtn?.addEventListener('click', loadOpsBaseline);
 runVerifyPipelineBtn?.addEventListener('click', () => runOpsAction('verify-pipeline'));
 runVerifyPortalsBtn?.addEventListener('click', () => runOpsAction('verify-portals'));
@@ -187,14 +199,6 @@ typeFilterSelect?.addEventListener('change', (ev) => {
   pipelineFilters.type = String(ev.target.value || 'all');
   renderPipeline();
 });
-showHiddenToggle?.addEventListener('change', (ev) => {
-  pipelineState.showHidden = Boolean(ev.target.checked);
-  renderPipeline();
-});
-showPriorAppliedToggle?.addEventListener('change', (ev) => {
-  pipelineState.showPriorApplied = Boolean(ev.target.checked);
-  renderPipeline();
-});
 trackerSearchInput?.addEventListener('input', (ev) => {
   trackerState.query = String(ev.target.value || '').trim().toLowerCase();
   renderTrackerTable();
@@ -210,12 +214,17 @@ trackerClearFiltersBtn?.addEventListener('click', () => {
   if (trackerFlagsFilterSelect) trackerFlagsFilterSelect.value = 'all';
   renderTrackerTable();
 });
+reportsSearchInput?.addEventListener('input', (ev) => {
+  reportsState.query = String(ev.target.value || '').trim();
+  renderReportsList();
+});
+reportsOpenPipelineBtn?.addEventListener('click', () => openReportCompanyIn('pipeline'));
+reportsOpenTrackerBtn?.addEventListener('click', () => openReportCompanyIn('manage'));
 clearAllFiltersBtn?.addEventListener('click', () => {  pipelineFilters.source = 'all';
   pipelineFilters.type = 'all';
   pipelineState.query = '';
   pipelineState.showPriorApplied = false;
   if (pipelineSearchInput) pipelineSearchInput.value = '';
-  if (showPriorAppliedToggle) showPriorAppliedToggle.checked = false;
   renderPipeline();
 });
 pendingTableBody?.addEventListener('click', (ev) => {
@@ -266,6 +275,27 @@ pendingTable?.querySelectorAll('button[data-sort-key]').forEach((btn) => {
 
 trackerTable?.querySelectorAll('button[data-tracker-sort-key]').forEach((btn) => {
   btn.addEventListener('click', () => toggleTrackerSort(btn.dataset.trackerSortKey || 'date'));
+});
+
+document.getElementById('rulesTable')?.querySelectorAll('button[data-rules-sort-key]').forEach((btn) => {
+  btn.addEventListener('click', () => toggleRulesSort(btn.dataset.rulesSortKey || 'createdAt'));
+});
+document.getElementById('rulesSearchInput')?.addEventListener('input', (ev) => {
+  rulesState.query = String(ev.target.value || '').trim().toLowerCase();
+  renderRulesTable();
+});
+document.getElementById('rulesReasonFilterSelect')?.addEventListener('change', (ev) => {
+  rulesState.reasonFilter = String(ev.target.value || 'all');
+  renderRulesTable();
+});
+document.getElementById('rulesClearFiltersBtn')?.addEventListener('click', () => {
+  rulesState.query = '';
+  rulesState.reasonFilter = 'all';
+  const searchInput = document.getElementById('rulesSearchInput');
+  const reasonSelect = document.getElementById('rulesReasonFilterSelect');
+  if (searchInput) searchInput.value = '';
+  if (reasonSelect) reasonSelect.value = 'all';
+  renderRulesTable();
 });
 
 addToPipelineBtn?.addEventListener('click', () => {
@@ -354,9 +384,9 @@ initWhimsy();
 initSpendTierToggle();
 
 function setActiveTab(tab) {
-  const tabs = ['start', 'pipeline', 'manage', 'analytics', 'reports', 'evaluate', 'profile'];
-  const btns = { start: startTabBtn, pipeline: pipelineTabBtn, manage: manageTabBtn, analytics: analyticsTabBtn, reports: reportsTabBtn, evaluate: evaluateTabBtn, profile: profileTabBtn };
-  const panels = { start: startPanel, pipeline: pipelinePanel, manage: managePanel, analytics: analyticsPanel, reports: reportsPanel, evaluate: evaluatePanel, profile: profilePanel };
+  const tabs = ['start', 'pipeline', 'manage', 'analytics', 'reports', 'evaluate', 'profile', 'rules'];
+  const btns = { start: startTabBtn, pipeline: pipelineTabBtn, manage: manageTabBtn, analytics: analyticsTabBtn, reports: reportsTabBtn, evaluate: evaluateTabBtn, profile: profileTabBtn, rules: rulesTabBtn };
+  const panels = { start: startPanel, pipeline: pipelinePanel, manage: managePanel, analytics: analyticsPanel, reports: reportsPanel, evaluate: evaluatePanel, profile: profilePanel, rules: rulesPanel };
   for (const t of tabs) {
     const active = t === tab;
     btns[t]?.classList.toggle('active', active);
@@ -370,8 +400,10 @@ function setActiveTab(tab) {
   document.body.classList.toggle('tab-reports', tab === 'reports');
   document.body.classList.toggle('tab-evaluate', tab === 'evaluate');
   document.body.classList.toggle('tab-profile', tab === 'profile');
+  document.body.classList.toggle('tab-rules', tab === 'rules');
   if (tab === 'pipeline') renderPipeline();
   if (tab === 'analytics') renderAnalytics();
+  if (tab === 'rules') renderRulesTable();
 }
 
 function showToast(message, type = 'success') {
@@ -881,19 +913,30 @@ function renderPipeline() {
     fullTime: sortedPending.filter((p) => p.employmentType === 'full-time').length,
   };
 
-  renderMetric(pendingSummary, `Total: ${summary.total}`);
-  renderMetric(pendingSummary, `Showing: ${summary.total} of ${pipelineState.pending.length} pending`);
-  if (hiddenJobsCount) {
-    hiddenJobsCount.textContent = exclusionSummary.totalHidden > 0 ? ` (${exclusionSummary.totalHidden})` : '';
+  // "Hidden" (fit-rule matches) and "Previously applied" are independent
+  // filters over the same pipelineState.pending set, not a partition of it —
+  // a row can be both (fit-rule-hidden AND a repeat company), so their counts
+  // overlap and don't subtract cleanly from the total. Each chip's own label
+  // states what it's counting *out of* (93), not "of the remaining rows",
+  // so the numbers don't read as if they should sum to the total shown.
+  renderMetric(pendingSummary, `Showing ${summary.total} of ${pipelineState.pending.length} pending`);
+  if (exclusionSummary.totalHidden > 0) {
+    renderChip(pendingSummary, `Hidden by fit rules: ${exclusionSummary.totalHidden} of ${pipelineState.pending.length}`, {
+      clickable: true,
+      active: pipelineState.showHidden,
+      onClick: () => {
+        pipelineState.showHidden = !pipelineState.showHidden;
+        renderPipeline();
+      },
+    });
   }
   const priorAppliedCount = pipelineState.pending.filter((item) => priorAppliedStatusFor(item.company)).length;
   if (priorAppliedCount > 0) {
-    renderChip(pendingSummary, `Previously applied: ${priorAppliedCount}${pipelineState.showPriorApplied ? '' : ' (hidden)'}`, {
+    renderChip(pendingSummary, `Previously applied: ${priorAppliedCount} of ${pipelineState.pending.length}${pipelineState.showPriorApplied ? '' : ' (hidden)'}`, {
       clickable: true,
       active: pipelineState.showPriorApplied,
       onClick: () => {
         pipelineState.showPriorApplied = !pipelineState.showPriorApplied;
-        if (showPriorAppliedToggle) showPriorAppliedToggle.checked = pipelineState.showPriorApplied;
         renderPipeline();
       },
     });
@@ -935,7 +978,6 @@ function renderPipeline() {
         pipelineFilters.source = "all";
         pipelineFilters.type = "all";
         pipelineState.showPriorApplied = false;
-        if (showPriorAppliedToggle) showPriorAppliedToggle.checked = false;
         renderPipeline();
       },
     });
@@ -1022,6 +1064,241 @@ async function removeFitRule(rule, promptLabel) {
   renderPipeline();
   return true;
 }
+
+// ─── Rules (manage/edit/delete auto-exclude filters) ──────────────────────────
+
+const rulesTableBody = document.querySelector('#rulesTable tbody');
+const ruleEditModal = document.getElementById('ruleEditModal');
+const ruleEditForm = document.getElementById('ruleEditForm');
+const ruleEditReasonSelect = document.getElementById('ruleEditReasonSelect');
+const ruleEditCompany = document.getElementById('ruleEditCompany');
+const ruleEditSource = document.getElementById('ruleEditSource');
+const ruleEditType = document.getElementById('ruleEditType');
+const ruleEditRoleKeywords = document.getElementById('ruleEditRoleKeywords');
+const ruleEditLocationKeywords = document.getElementById('ruleEditLocationKeywords');
+const ruleEditPreview = document.getElementById('ruleEditPreview');
+const ruleEditCancelBtn = document.getElementById('ruleEditCancelBtn');
+
+let ruleEditTargetId = '';
+
+function ruleReasonLabel(rule) {
+  const currentReason = rejectReasons.find((r) => r.id === rule.reasonId);
+  return currentReason?.label || rule.reasonLabel || rule.reasonId || '';
+}
+
+function matchesRulesSearch(rule, query) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return [
+    rule.company,
+    rule.source,
+    rule.employmentType,
+    ruleReasonLabel(rule),
+    ...(rule.roleKeywords || []),
+    ...(rule.locationKeywords || []),
+  ].some((field) => String(field || '').toLowerCase().includes(q));
+}
+
+function filterRules(rules) {
+  return rules.filter((rule) => {
+    if (rulesState.reasonFilter !== 'all' && rule.reasonId !== rulesState.reasonFilter) return false;
+    return matchesRulesSearch(rule, rulesState.query);
+  });
+}
+
+function ruleSortValue(rule, key) {
+  switch (key) {
+    case 'reasonLabel':
+      return ruleReasonLabel(rule).toLowerCase();
+    case 'company':
+      return String(rule.company || '').toLowerCase();
+    case 'source':
+      return String(rule.source || '').toLowerCase();
+    case 'employmentType':
+      return String(rule.employmentType || '').toLowerCase();
+    case 'createdAt':
+      return rule.createdAt ? new Date(rule.createdAt).getTime() : 0;
+    default:
+      return '';
+  }
+}
+
+function sortRules(rules) {
+  const key = rulesState.sortKey || 'createdAt';
+  const dir = rulesState.sortDir === 'desc' ? -1 : 1;
+  return [...rules].sort((a, b) => {
+    const av = ruleSortValue(a, key);
+    const bv = ruleSortValue(b, key);
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
+  });
+}
+
+function toggleRulesSort(sortKey) {
+  if (rulesState.sortKey === sortKey) {
+    rulesState.sortDir = rulesState.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    rulesState.sortKey = sortKey;
+    rulesState.sortDir = sortKey === 'createdAt' ? 'desc' : 'asc';
+  }
+  renderRulesTable();
+}
+
+function updateRulesSortIndicators() {
+  const table = document.getElementById('rulesTable');
+  if (!table) return;
+  table.querySelectorAll('button[data-rules-sort-key]').forEach((btn) => {
+    const key = btn.dataset.rulesSortKey || '';
+    if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent.trim();
+    const active = key === rulesState.sortKey;
+    const arrow = active ? (rulesState.sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+    btn.textContent = `${btn.dataset.baseLabel}${arrow}`;
+    btn.setAttribute('aria-sort', active ? (rulesState.sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
+  });
+}
+
+function ensureRulesReasonFilterSelect() {
+  const select = document.getElementById('rulesReasonFilterSelect');
+  if (!select || select.options.length > 0) return;
+  const allOption = document.createElement('option');
+  allOption.value = 'all';
+  allOption.textContent = 'All reasons';
+  select.appendChild(allOption);
+  rejectReasons.forEach((r) => {
+    const option = document.createElement('option');
+    option.value = r.id;
+    option.textContent = r.label;
+    select.appendChild(option);
+  });
+}
+
+async function renderRulesTable() {
+  if (!rulesTableBody) return;
+  ensureRulesReasonFilterSelect();
+  await loadFitFilters();
+  const allRules = pipelineState.fitFilters || [];
+  const rules = sortRules(filterRules(allRules));
+  const countEl = document.getElementById('rulesCount');
+  if (countEl) {
+    countEl.textContent = allRules.length
+      ? (rules.length !== allRules.length ? ` · ${rules.length} of ${allRules.length}` : ` · ${allRules.length}`)
+      : '';
+  }
+  updateRulesSortIndicators();
+
+  if (!allRules.length) {
+    rulesTableBody.innerHTML = '<tr><td colspan="8" class="empty-state">No rules yet — reject a pending item and check a filter box to teach one.</td></tr>';
+    return;
+  }
+  if (!rules.length) {
+    rulesTableBody.innerHTML = '<tr><td colspan="8" class="empty-state">No rules match your search/filter.</td></tr>';
+    return;
+  }
+
+  rulesTableBody.innerHTML = '';
+  for (const rule of rules) {
+    const tr = document.createElement('tr');
+    const reasonLabel = ruleReasonLabel(rule);
+    const createdAt = rule.createdAt ? new Date(rule.createdAt).toLocaleDateString() : '-';
+    tr.innerHTML = `
+      <td>${escapeHtml(reasonLabel)}</td>
+      <td>${escapeHtml(rule.company || '-')}</td>
+      <td>${escapeHtml(rule.source || '-')}</td>
+      <td>${escapeHtml(rule.employmentType || '-')}</td>
+      <td>${escapeHtml((rule.roleKeywords || []).join(', ') || '-')}</td>
+      <td>${escapeHtml((rule.locationKeywords || []).join(', ') || '-')}</td>
+      <td>${escapeHtml(createdAt)}</td>
+      <td class="actions-cell"></td>
+    `;
+    const actionsCell = tr.querySelector('.actions-cell');
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'secondary';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openRuleEditModal(rule));
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'secondary action-reject';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async () => {
+      await removeFitRule(rule);
+      renderRulesTable();
+    });
+    actionsCell.append(editBtn, deleteBtn);
+    rulesTableBody.appendChild(tr);
+  }
+}
+
+function ensureRuleEditReasonSelect() {
+  if (!ruleEditReasonSelect || ruleEditReasonSelect.options.length > 0) return;
+  rejectReasons.forEach((r) => {
+    const option = document.createElement('option');
+    option.value = r.id;
+    option.textContent = r.label;
+    ruleEditReasonSelect.appendChild(option);
+  });
+}
+
+function openRuleEditModal(rule) {
+  if (!ruleEditModal) return;
+  ensureRuleEditReasonSelect();
+  ruleEditTargetId = rule.id;
+  if (ruleEditReasonSelect) ruleEditReasonSelect.value = rule.reasonId || '';
+  if (ruleEditCompany) ruleEditCompany.value = rule.company || '';
+  if (ruleEditSource) ruleEditSource.value = rule.source || '';
+  if (ruleEditType) ruleEditType.value = rule.employmentType || '';
+  if (ruleEditRoleKeywords) ruleEditRoleKeywords.value = (rule.roleKeywords || []).join(', ');
+  if (ruleEditLocationKeywords) ruleEditLocationKeywords.value = (rule.locationKeywords || []).join(', ');
+  updateRuleEditPreview();
+  ruleEditModal.showModal();
+}
+
+function currentRuleEditFromForm() {
+  return normalizeRuleScope({
+    company: ruleEditCompany?.value || '',
+    source: ruleEditSource?.value || '',
+    employmentType: ruleEditType?.value || '',
+    roleKeywords: parseCsvKeywords(ruleEditRoleKeywords?.value || ''),
+    locationKeywords: parseCsvKeywords(ruleEditLocationKeywords?.value || ''),
+  });
+}
+
+function updateRuleEditPreview() {
+  if (!ruleEditPreview) return;
+  ruleEditPreview.textContent = formatRejectPreview(currentRuleEditFromForm());
+}
+
+[ruleEditCompany, ruleEditSource, ruleEditType, ruleEditRoleKeywords, ruleEditLocationKeywords].forEach((el) => {
+  el?.addEventListener('input', updateRuleEditPreview);
+  el?.addEventListener('change', updateRuleEditPreview);
+});
+
+ruleEditCancelBtn?.addEventListener('click', () => ruleEditModal?.close());
+
+ruleEditForm?.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  if (!ruleEditTargetId) return;
+  const reason = rejectReasons.find((r) => r.id === ruleEditReasonSelect?.value);
+  const rule = {
+    reasonId: ruleEditReasonSelect?.value || '',
+    reasonLabel: reason?.label || '',
+    ...currentRuleEditFromForm(),
+  };
+  try {
+    await api('/api/fit-filters/update', {
+      method: 'POST',
+      body: JSON.stringify({ id: ruleEditTargetId, rule }),
+    });
+    ruleEditModal?.close();
+    await loadFitFilters();
+    renderRulesTable();
+    renderPipeline();
+    showToast('Rule updated', 'success');
+  } catch (err) {
+    window.alert(formatActionError('Update failed', err));
+  }
+});
 
 function summarizeExclusions(items) {
   const result = {
@@ -1166,7 +1443,6 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0, matchRule = null) 
   const posted = displayPipelinePosted(item);
   const flags = renderFlagsCell(item, matchRule);
   const openPostingLabel = 'Open';
-  const addedAt = formatAddedAt(item.addedAt);
   const subtitle = buildSubtitle(item, source);
 
   el.innerHTML = `
@@ -1176,7 +1452,6 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0, matchRule = null) 
         <span class="source-label">${escapeHtml(source)}</span>
       </span>
     </td>
-    <td class="added-cell">${escapeHtml(addedAt || '-')}</td>
     <td><div class="cell-title">${escapeHtml(company || '-')}</div></td>
     <td>
       <div class="cell-title">${escapeHtml(role)}</div>
@@ -1186,6 +1461,7 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0, matchRule = null) 
     <td>${escapeHtml(location || '-')}</td>
     <td>${escapeHtml(posted || '-')}</td>
     <td class="score-cell"></td>
+    <td class="resume-cell"></td>
     <td>${flags}</td>
     <td class="actions-cell">
       <div class="action-stack">
@@ -1196,6 +1472,7 @@ function renderPipelineItem(item, allowProcess, rowIndex = 0, matchRule = null) 
 
   if (allowProcess) {
     el.querySelector('.score-cell').appendChild(makeEvaluateAction(item));
+    el.querySelector('.resume-cell').appendChild(makeResumeAction(item));
     const row = el.querySelector('.item-actions');
     row.appendChild(makeOpenPostingLink(item, openPostingLabel));
     if (matchRule) row.appendChild(makeUnhideActionButton(matchRule));
@@ -1442,7 +1719,7 @@ function formatAddedAt(value) {
 }
 
 function sortPipelineItems(items) {
-  const key = pipelineState.sortKey || 'added';
+  const key = pipelineState.sortKey || 'posted';
   const dir = pipelineState.sortDir === 'desc' ? -1 : 1;
   return [...(items || [])].sort((a, b) => {
     const av = sortValueForItem(a, key);
@@ -1464,8 +1741,6 @@ function sortValueForItem(item, key) {
   switch (key) {
     case 'source':
       return inferSource(item).toLowerCase();
-    case 'added':
-      return String(item.addedAt || '').toLowerCase();
     case 'company':
       return String(item.company || '').toLowerCase();
     case 'role':
@@ -1498,7 +1773,7 @@ function togglePipelineSort(sortKey) {
     pipelineState.sortDir = pipelineState.sortDir === 'asc' ? 'desc' : 'asc';
   } else {
     pipelineState.sortKey = sortKey;
-    pipelineState.sortDir = sortKey === 'added' ? 'desc' : 'asc';
+    pipelineState.sortDir = sortKey === 'posted' ? 'desc' : 'asc';
   }
   renderPipeline();
 }
@@ -2067,6 +2342,44 @@ function makeUnhideActionButton(rule) {
   return btn;
 }
 
+// Pending Pipeline's Resume column: "Create" when the row has an evaluation
+// report but no resume yet, "Regenerate" once one exists, disabled until a
+// report exists at all (there's nothing to tailor from before that — see
+// modes/pdf.md Step 1, "Read cv.md as the source of truth" against the
+// report's own JD/customization plan, not the bare pipeline row).
+function makeResumeAction(item) {
+  const reportFilename = String(item?.reportFilename || '').trim();
+  const company = String(item?.company || '').trim();
+
+  if (!reportFilename || !company) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'secondary';
+    btn.textContent = 'Create';
+    btn.disabled = true;
+    btn.title = 'Evaluate this posting first — a resume is tailored from its report.';
+    return btn;
+  }
+
+  const hasResume = Boolean(String(item?.pdfFilename || '').trim());
+  // Read from the shared job list (not local button state) so "Regenerating…"
+  // survives a re-render triggered by switching tabs and back — a plain DOM
+  // property on this button would be torn down the moment the row unmounts.
+  const runningJob = reportsState.pdfJobs.find((j) => j.status === 'running' && j.company === company);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'secondary';
+  if (runningJob) {
+    btn.disabled = true;
+    btn.textContent = hasResume ? 'Regenerating…' : 'Creating…';
+  } else {
+    btn.textContent = hasResume ? 'Regenerate' : 'Create';
+    btn.addEventListener('click', () => runResumeGeneration(company, reportFilename));
+  }
+  return btn;
+}
+
 function ensureRejectReasonSelect() {
   if (!rejectReasonSelect || rejectReasonSelect.options.length > 0) return;
   rejectReasons.forEach((r) => {
@@ -2174,7 +2487,7 @@ function buildReasonFallbackRule(item, reasonId) {
     return { employmentType };
   }
   if (reasonId === 'location-mismatch') {
-    if (locationKeywords.length) return { locationKeywords, source, employmentType };
+    if (locationKeywords.length) return { locationKeywords };
     return { company };
   }
 
@@ -2388,6 +2701,77 @@ function renderAnalytics() {
   renderFunnelChart(rows);
   renderScoreChart(rows);
   renderTopCompanies(rows);
+  renderLegitimacyChart(rows);
+  renderTimeSeriesChart(rows);
+  renderSourceChart(pipelineState.pending || []);
+}
+
+function renderLegitimacyChart(rows) {
+  const el = document.getElementById('legitimacyChart');
+  if (!el) return;
+  const tierColors = { 'High Confidence': '#2b8a3e', 'Proceed with Caution': '#f08c00', 'Suspicious': '#c92a2a' };
+  const counts = { 'High Confidence': 0, 'Proceed with Caution': 0, 'Suspicious': 0 };
+  let unflagged = 0;
+  for (const r of rows) {
+    const tier = String(r.legitimacy || '').trim();
+    if (tier && counts[tier] !== undefined) counts[tier]++;
+    else unflagged++;
+  }
+  const items = Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => ({ label: k, value: v, color: tierColors[k] }));
+  if (unflagged > 0) items.push({ label: 'Not flagged', value: unflagged, color: '#868e96' });
+  if (!items.length) { el.innerHTML = '<p class="chart-empty">No tracker data yet.</p>'; return; }
+  const onSelect = (label) => {
+    if (label === 'Not flagged') return;
+    setActiveTab('manage');
+    trackerState.flagsFilter = label;
+    if (trackerFlagsFilterSelect) trackerFlagsFilterSelect.value = label;
+    renderTrackerTable();
+  };
+  el.innerHTML = buildDonutChart(items, 'Posting Legitimacy');
+  wireDonutChart(el, items, onSelect);
+}
+
+function renderSourceChart(pending) {
+  const el = document.getElementById('sourceChart');
+  if (!el) return;
+  const counts = {};
+  for (const item of pending) {
+    const source = String(item.source || 'Unknown').trim() || 'Unknown';
+    counts[source] = (counts[source] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const top = sorted.slice(0, 6);
+  const restTotal = sorted.slice(6).reduce((sum, [, v]) => sum + v, 0);
+  const palette = ['#1971c2', '#0b7285', '#2b8a3e', '#f08c00', '#9c36b5', '#e64980', '#868e96'];
+  const items = top.map(([label, value], i) => ({ label, value, color: palette[i % palette.length] }));
+  if (restTotal > 0) items.push({ label: 'Other', value: restTotal, color: '#868e96' });
+  if (!items.length) { el.innerHTML = '<p class="chart-empty">No pending pipeline items.</p>'; return; }
+  const onSelect = (label) => {
+    setActiveTab('pipeline');
+    pipelineFilters.source = label === 'Other' ? 'all' : label;
+    if (sourceFilterSelect && label !== 'Other') sourceFilterSelect.value = label;
+    renderPipeline();
+  };
+  el.innerHTML = buildDonutChart(items, 'Pending Pipeline by Source');
+  wireDonutChart(el, items, onSelect);
+}
+
+function renderTimeSeriesChart(rows) {
+  const el = document.getElementById('timeSeriesChart');
+  if (!el) return;
+  const byMonth = {};
+  for (const r of rows) {
+    const m = String(r.date || '').slice(0, 7); // YYYY-MM
+    if (!/^\d{4}-\d{2}$/.test(m)) continue;
+    byMonth[m] = (byMonth[m] || 0) + 1;
+  }
+  const months = Object.keys(byMonth).sort();
+  if (!months.length) { el.innerHTML = '<p class="chart-empty">No dated tracker rows yet.</p>'; return; }
+  // Cap to the most recent 12 months so a long history doesn't cram the axis.
+  const recentMonths = months.slice(-12);
+  const points = recentMonths.map((m) => ({ label: m, value: byMonth[m] }));
+  el.innerHTML = buildTimeSeriesChart(points, 'Applications Over Time');
+  wireTimeSeriesChart(el);
 }
 
 function renderFunnelChart(rows) {
@@ -2402,6 +2786,13 @@ function renderFunnelChart(rows) {
   if (!stages.length) { el.innerHTML = '<p class="chart-empty">No tracker data yet.</p>'; return; }
   const max = Math.max(...stages.map((s) => counts[s]));
   el.innerHTML = buildBarChart(stages.map((s) => ({ label: s, value: counts[s], color: FUNNEL_COLORS[s] || '#0b7285' })), max, 'Applications by Stage');
+  wireBarChart(el);
+  el.querySelectorAll('.chart-hover-target').forEach((node, i) => {
+    node.addEventListener('click', () => {
+      setActiveTab('manage');
+      setTrackerFilter(stages[i]);
+    });
+  });
 }
 
 function renderScoreChart(rows) {
@@ -2420,6 +2811,7 @@ function renderScoreChart(rows) {
   const items = Object.entries(buckets).filter(([, v]) => v > 0).map(([k, v]) => ({ label: k, value: v, color: scoreColors[k] }));
   if (!items.length) { el.innerHTML = '<p class="chart-empty">No scored evaluations yet.</p>'; return; }
   el.innerHTML = buildBarChart(items, Math.max(...items.map((i) => i.value)), 'Roles by Score Bucket');
+  wireBarChart(el);
 }
 
 function renderTopCompanies(rows) {
@@ -2440,6 +2832,15 @@ function renderTopCompanies(rows) {
     'Top Companies (best score)',
     true,
   );
+  wireBarChart(el);
+  el.querySelectorAll('.chart-hover-target').forEach((node, i) => {
+    node.addEventListener('click', () => {
+      setActiveTab('manage');
+      trackerState.query = sorted[i][0].toLowerCase();
+      if (trackerSearchInput) trackerSearchInput.value = sorted[i][0];
+      renderTrackerTable();
+    });
+  });
 }
 
 function buildBarChart(items, max, title, showValue = false) {
@@ -2454,13 +2855,168 @@ function buildBarChart(items, max, title, showValue = false) {
     const valueText = showValue ? item.value.toFixed(1) : String(item.value);
     rows += `
       <text x="${LABEL_W}" y="${y + BAR_H * 0.68}" class="chart-label" text-anchor="end">${label}</text>
-      <rect x="${LABEL_W + 8}" y="${y + 2}" width="${bw}" height="${BAR_H - 4}" rx="4" fill="${item.color}" opacity="0.85" />
+      <rect class="chart-hover-target" data-tooltip="${escapeAttr(`${item.label}: ${valueText}`)}" x="${LABEL_W + 8}" y="${y + 2}" width="${bw}" height="${BAR_H - 4}" rx="4" fill="${item.color}" opacity="0.85" />
       <text x="${LABEL_W + 8 + bw + 6}" y="${y + BAR_H * 0.68}" class="chart-value">${valueText}</text>`;
   });
-  return `<svg viewBox="0 0 ${W} ${H}" class="bar-chart" aria-label="${escapeAttr(title)}">
+  return `<div class="barchart-wrap"><svg viewBox="0 0 ${W} ${H}" class="bar-chart" aria-label="${escapeAttr(title)}">
     <style>.chart-label{font:13px system-ui,sans-serif;fill:var(--ink)}.chart-value{font:12px system-ui,sans-serif;fill:var(--muted)}</style>
     ${rows}
-  </svg>`;
+  </svg></div>`;
+}
+
+// See wireDonutChart's comment for why wiring is a separate, container-scoped step.
+function wireBarChart(containerEl) {
+  const wrap = containerEl?.querySelector('.barchart-wrap');
+  attachChartTooltip(wrap);
+}
+
+// Shared hover-tooltip wiring for any chart container holding elements with
+// [data-tooltip]. Delegated on the wrapper so one listener covers every
+// segment/point, and re-attachable after each re-render (innerHTML replace
+// tears down old listeners along with the old nodes).
+function attachChartTooltip(wrapEl) {
+  if (!wrapEl) return;
+  let tooltip = wrapEl.querySelector('.chart-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.className = 'chart-tooltip';
+    wrapEl.appendChild(tooltip);
+  }
+  const show = (target, ev) => {
+    const text = target.dataset.tooltip;
+    if (!text) return;
+    tooltip.textContent = text;
+    const wrapRect = wrapEl.getBoundingClientRect();
+    tooltip.style.left = `${ev.clientX - wrapRect.left}px`;
+    tooltip.style.top = `${ev.clientY - wrapRect.top}px`;
+    tooltip.classList.add('is-visible');
+  };
+  const hide = () => tooltip.classList.remove('is-visible');
+
+  wrapEl.querySelectorAll('[data-tooltip]').forEach((node) => {
+    node.addEventListener('mouseenter', (ev) => show(node, ev));
+    node.addEventListener('mousemove', (ev) => show(node, ev));
+    node.addEventListener('mouseleave', hide);
+  });
+}
+
+// Interactive donut chart: hover shows a tooltip (label, value, share %),
+// click on a wedge or legend entry calls onSelect(label) so charts can drill
+// into the tab/filter that explains the slice (see renderLegitimacyChart /
+// renderSourceChart) instead of being a static picture.
+function buildDonutChart(items, title) {
+  const total = items.reduce((sum, i) => sum + i.value, 0);
+  const SIZE = 220, CX = SIZE / 2, CY = SIZE / 2, R = 80, STROKE = 34;
+  const circumference = 2 * Math.PI * R;
+  let offset = 0;
+  let arcs = '';
+  items.forEach((item, i) => {
+    const frac = total > 0 ? item.value / total : 0;
+    const dash = frac * circumference;
+    const pct = total > 0 ? Math.round(frac * 100) : 0;
+    arcs += `<circle
+      class="chart-hover-target"
+      data-idx="${i}"
+      data-tooltip="${escapeAttr(`${item.label}: ${item.value} (${pct}%)`)}"
+      cx="${CX}" cy="${CY}" r="${R}"
+      fill="none" stroke="${item.color}" stroke-width="${STROKE}"
+      stroke-dasharray="${dash} ${circumference - dash}"
+      stroke-dashoffset="${-offset}"
+      transform="rotate(-90 ${CX} ${CY})"
+    />`;
+    offset += dash;
+  });
+
+  const legend = items.map((item, i) => `
+    <button type="button" class="chart-legend-item" data-idx="${i}">
+      <span class="chart-legend-swatch" style="background:${item.color}"></span>
+      ${escapeHtml(item.label)}
+      <span class="chart-legend-value">${item.value}</span>
+    </button>`).join('');
+
+  return `<div class="donut-wrap">
+    <svg viewBox="0 0 ${SIZE} ${SIZE}" class="donut-chart" aria-label="${escapeAttr(title)}">
+      ${arcs}
+      <text x="${CX}" y="${CY - 4}" class="donut-center-label">${total}</text>
+      <text x="${CX}" y="${CY + 16}" class="donut-center-sublabel">total</text>
+    </svg>
+    <div class="chart-legend">${legend}</div>
+  </div>`;
+}
+
+// Wires hover tooltips and click-to-drill-down for a donut chart just
+// inserted into `containerEl` via `containerEl.innerHTML = buildDonutChart(...)`.
+// Kept separate from the builder (which only returns markup) so each caller
+// wires exactly its own container — a shared "grab the last .donut-wrap in
+// the document" approach breaks the moment two donuts render in the same
+// tick, which renderAnalytics() does (Legitimacy + Source together).
+function wireDonutChart(containerEl, items, onSelect) {
+  const wrap = containerEl?.querySelector('.donut-wrap');
+  if (!wrap) return;
+  attachChartTooltip(wrap);
+  if (typeof onSelect !== 'function') return;
+  wrap.querySelectorAll('[data-idx]').forEach((node) => {
+    node.addEventListener('click', () => {
+      const idx = Number(node.dataset.idx);
+      const item = items[idx];
+      if (item) onSelect(item.label);
+    });
+  });
+}
+
+// Lightweight line/area chart for a monthly time series — no external
+// charting library is available in this sandboxed page, so this hand-rolls
+// just enough SVG (axis-free, hover dots) to show a trend at a glance.
+function buildTimeSeriesChart(points, title) {
+  const W = 640, H = 220, PAD_L = 36, PAD_R = 16, PAD_T = 16, PAD_B = 28;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const max = Math.max(1, ...points.map((p) => p.value));
+  const stepX = points.length > 1 ? plotW / (points.length - 1) : 0;
+
+  const coords = points.map((p, i) => ({
+    x: PAD_L + i * stepX,
+    y: PAD_T + plotH - (p.value / max) * plotH,
+    ...p,
+  }));
+
+  const linePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L ${coords[coords.length - 1].x.toFixed(1)} ${PAD_T + plotH} L ${coords[0].x.toFixed(1)} ${PAD_T + plotH} Z`;
+
+  const dots = coords.map((c, i) => `
+    <circle class="chart-hover-target" data-tooltip="${escapeAttr(`${formatMonthLabel(c.label)}: ${c.value}`)}"
+      cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="5" fill="#1971c2" />`).join('');
+
+  // Every label would overlap on 12 months at this width, so thin them out —
+  // first, last, and enough of a stride in between to stay legible.
+  const labelStride = Math.max(1, Math.ceil(coords.length / 6));
+  const xLabels = coords.map((c, i) => {
+    if (i % labelStride !== 0 && i !== coords.length - 1) return '';
+    return `<text x="${c.x.toFixed(1)}" y="${H - 8}" class="chart-value" text-anchor="middle">${escapeHtml(formatMonthLabel(c.label))}</text>`;
+  }).join('');
+
+  return `<div class="timeseries-wrap">
+    <svg viewBox="0 0 ${W} ${H}" class="timeseries-chart" aria-label="${escapeAttr(title)}">
+      <style>.chart-label{font:13px system-ui,sans-serif;fill:var(--ink)}.chart-value{font:11px system-ui,sans-serif;fill:var(--muted)}</style>
+      <path d="${areaPath}" fill="#1971c2" opacity="0.12" />
+      <path d="${linePath}" fill="none" stroke="#1971c2" stroke-width="2.5" />
+      ${dots}
+      ${xLabels}
+    </svg>
+  </div>`;
+}
+
+// See wireDonutChart's comment for why wiring is a separate, container-scoped step.
+function wireTimeSeriesChart(containerEl) {
+  const wrap = containerEl?.querySelector('.timeseries-wrap');
+  attachChartTooltip(wrap);
+}
+
+function formatMonthLabel(yyyyMm) {
+  const [y, m] = String(yyyyMm || '').split('-');
+  if (!y || !m) return yyyyMm;
+  const date = new Date(Number(y), Number(m) - 1, 1);
+  return date.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
@@ -2489,7 +3045,6 @@ function updateReportsScrollShadow(el) {
 async function loadReports() {
   if (reportsLoaded) return;
   const el = document.getElementById('reportsList');
-  const countEl = document.getElementById('reportsCount');
   if (!el) return;
   el.innerHTML = '<p class="chart-empty">Loading…</p>';
   try {
@@ -2499,27 +3054,55 @@ async function loadReports() {
     reportsState.items = reports;
     reportsLoaded = true;
     renderReportsToolbar();
-    if (countEl) countEl.textContent = reports.length ? ` · ${reports.length}` : '';
-    if (!reports.length) { el.innerHTML = '<p class="chart-empty">No reports found.</p>'; return; }
-    el.innerHTML = reports.map((r) => `
-      <button class="report-list-item" type="button" data-slug="${escapeAttr(r.filename)}">
-        <span class="report-num">#${escapeHtml(r.num)}</span>
-        <span class="report-meta">
-          <span class="report-company">${escapeHtml(r.company || r.slug)}</span>
-          <span class="report-role">${escapeHtml(r.role)}</span>
-        </span>
-        <span class="report-score ${scoreClass(r.score)}">${escapeHtml(r.score || '—')}</span>
-        <span class="report-date">${escapeHtml(r.date)}</span>
-      </button>`).join('');
-    el.querySelectorAll('.report-list-item').forEach((btn) => {
-      btn.addEventListener('click', () => openReport(btn.dataset.slug, btn));
-    });
+    renderReportsList();
     el.addEventListener('scroll', () => updateReportsScrollShadow(el));
     window.addEventListener('resize', () => updateReportsScrollShadow(el));
-    updateReportsScrollShadow(el);
   } catch (err) {
     el.innerHTML = `<p class="chart-empty">Error: ${escapeHtml(String(err.message))}</p>`;
   }
+}
+
+function matchesReportsSearch(report, query) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return [report.company, report.role, report.num, report.slug]
+    .some((field) => String(field || '').toLowerCase().includes(q));
+}
+
+// Re-renders from the cached fetch (reportsState.items) — no network call —
+// so search typing stays instant, matching the tracker/pipeline search
+// pattern (renderTrackerTable / renderPipeline).
+function renderReportsList() {
+  const el = document.getElementById('reportsList');
+  const countEl = document.getElementById('reportsCount');
+  if (!el) return;
+
+  const query = String(reportsState.query || '').trim();
+  const reports = reportsState.items.filter((r) => matchesReportsSearch(r, query));
+
+  if (countEl) {
+    countEl.textContent = reportsState.items.length
+      ? (query ? ` · ${reports.length} of ${reportsState.items.length}` : ` · ${reportsState.items.length}`)
+      : '';
+  }
+
+  if (!reportsState.items.length) { el.innerHTML = '<p class="chart-empty">No reports found.</p>'; return; }
+  if (!reports.length) { el.innerHTML = '<p class="chart-empty">No reports match your search.</p>'; return; }
+
+  el.innerHTML = reports.map((r) => `
+    <button class="report-list-item${r.filename === reportsState.selectedSlug ? ' is-active' : ''}" type="button" data-slug="${escapeAttr(r.filename)}">
+      <span class="report-num">#${escapeHtml(r.num)}</span>
+      <span class="report-meta">
+        <span class="report-company">${escapeHtml(r.company || r.slug)}</span>
+        <span class="report-role">${escapeHtml(r.role)}</span>
+      </span>
+      <span class="report-score ${scoreClass(r.score)}">${escapeHtml(r.score || '—')}</span>
+      <span class="report-date">${escapeHtml(r.date)}</span>
+    </button>`).join('');
+  el.querySelectorAll('.report-list-item').forEach((btn) => {
+    btn.addEventListener('click', () => openReport(btn.dataset.slug, btn));
+  });
+  updateReportsScrollShadow(el);
 }
 
 let profileLoaded = false;
@@ -2593,6 +3176,28 @@ async function openReport(slug, activeBtn) {
   }
 }
 
+// "Open in Pipeline" / "Open in Tracker" from a selected report: pre-fills
+// that tab's own search box with the company name and switches to it, same
+// as a user typing the search themselves — reuses the existing search/filter
+// state instead of adding a second, parallel jump-to-row mechanism.
+async function openReportCompanyIn(target) {
+  const selected = selectedReportMeta();
+  const company = String(selected?.company || '').trim();
+  if (!company) return;
+
+  if (target === 'pipeline') {
+    pipelineState.query = company.toLowerCase();
+    if (pipelineSearchInput) pipelineSearchInput.value = company;
+    setActiveTab('pipeline');
+  } else if (target === 'manage') {
+    trackerState.query = company.toLowerCase();
+    if (trackerSearchInput) trackerSearchInput.value = company;
+    if (!window._trackerRows) await loadTracker();
+    renderTrackerTable();
+    setActiveTab('manage');
+  }
+}
+
 function selectedReportMeta() {
   const slug = String(reportsState.selectedSlug || '').trim();
   if (!slug) return null;
@@ -2617,16 +3222,89 @@ function renderReportsToolbar() {
 
   if (!selected) {
     reportsGeneratePdfBtn.disabled = true;
-    reportsGeneratePdfBtn.textContent = 'Create PDF On Demand';
-    reportsToolbarMeta.textContent = 'Select a report to enable PDF generation.';
+    reportsGeneratePdfBtn.textContent = 'Create Resume On Demand';
+    reportsToolbarMeta.textContent = 'Select a report to enable resume generation.';
+    reportsOpenPipelineBtn?.classList.add('is-hidden');
+    reportsOpenTrackerBtn?.classList.add('is-hidden');
     return;
   }
 
-  reportsGeneratePdfBtn.disabled = reportsState.pdfRunning || !company;
-  reportsGeneratePdfBtn.textContent = reportsState.pdfRunning ? 'Generating…' : 'Create PDF On Demand';
+  reportsOpenPipelineBtn?.classList.toggle('is-hidden', !company);
+  reportsOpenTrackerBtn?.classList.toggle('is-hidden', !company);
+
+  // Generating one report's PDF never blocks starting another — each click
+  // queues its own job (see generateSelectedReportPdf) — so the button only
+  // reflects whether *this* selected report already has a job in flight,
+  // not whether any PDF job anywhere is running.
+  const alreadyRunning = reportsState.pdfJobs.some((j) => j.status === 'running' && j.company === company);
+  reportsGeneratePdfBtn.disabled = alreadyRunning || !company;
+  reportsGeneratePdfBtn.textContent = alreadyRunning ? 'Generating…' : 'Create Resume On Demand';
   reportsToolbarMeta.textContent = company
     ? `Runs /career-ops pdf ${company}`
     : 'Company name missing in this report header.';
+}
+
+// Shared by the Reports tab's "Create Resume On Demand" button and the
+// Pending Pipeline's per-row Create/Regenerate button, so a resume job
+// started from either place lands in the same reportsState.pdfJobs list —
+// visible in the Reports tab's job cards and surviving a tab switch, instead
+// of each caller tracking its own local "is this running" state that gets
+// thrown away the moment the triggering DOM node unmounts (career-ops#3301).
+async function runResumeGeneration(company, reportSlug) {
+  if (reportsState.pdfJobs.some((j) => j.status === 'running' && j.company === company)) {
+    showToast(`Already generating a resume for ${company}`, 'error');
+    return null;
+  }
+
+  const job = {
+    id: `pdf-${Date.now()}-${reportsState.pdfJobsNextId++}`,
+    company,
+    slug: reportSlug,
+    status: 'running',
+    startedAt: Date.now(),
+    finishedAt: 0,
+    error: '',
+  };
+  reportsState.pdfJobs.unshift(job);
+  renderReportsToolbar();
+  renderPdfJobs();
+  renderPipeline();
+
+  try {
+    const result = await api('/api/reports/pdf-on-demand', {
+      method: 'POST',
+      body: JSON.stringify({ company, reportSlug }),
+    });
+    job.status = result?.pdfWritten ? 'done' : 'error';
+    job.error = job.status === 'error'
+      ? String(result?.stderr || result?.stdout || 'No PDF file was written — the agent may have asked a question instead of generating (see stdout/stderr).')
+      : '';
+  } catch (err) {
+    job.status = 'error';
+    job.error = String(err.message || err);
+  } finally {
+    job.finishedAt = Date.now();
+    showToast(
+      job.status === 'done' ? `Resume finished for ${company}` : `Resume generation failed for ${company}`,
+      job.status === 'done' ? 'success' : 'error'
+    );
+    // Re-fetch so the new PDF's download link / pipeline Regenerate button
+    // reflect the change without a full page refresh.
+    if (reportsLoaded) {
+      const selectedSlug = reportsState.selectedSlug;
+      reportsLoaded = false;
+      await loadReports();
+      if (selectedSlug) {
+        const btn = document.querySelector(`.report-list-item[data-slug="${escapeAttr(selectedSlug)}"]`);
+        reportsState.selectedSlug = selectedSlug;
+        btn?.classList.add('is-active');
+      }
+    }
+    await loadPipeline();
+    renderReportsToolbar();
+    renderPdfJobs();
+  }
+  return job;
 }
 
 async function generateSelectedReportPdf() {
@@ -2636,30 +3314,35 @@ async function generateSelectedReportPdf() {
     showToast('Select a report with a company name first', 'error');
     return;
   }
+  await runResumeGeneration(company, reportsState.selectedSlug);
+}
 
-  reportsState.pdfRunning = true;
-  renderReportsToolbar();
-  try {
-    await api('/api/reports/pdf-on-demand', {
-      method: 'POST',
-      body: JSON.stringify({ company }),
-    });
-    showToast(`PDF flow finished for ${company}`, 'success');
-    // Re-fetch so the new PDF's download link shows up without a full page refresh.
-    const selectedSlug = reportsState.selectedSlug;
-    reportsLoaded = false;
-    await loadReports();
-    if (selectedSlug) {
-      const btn = document.querySelector(`.report-list-item[data-slug="${escapeAttr(selectedSlug)}"]`);
-      reportsState.selectedSlug = selectedSlug;
-      btn?.classList.add('is-active');
-    }
-  } catch (err) {
-    showToast(`PDF generation failed: ${String(err.message || err)}`, 'error');
-  } finally {
-    reportsState.pdfRunning = false;
-    renderReportsToolbar();
+function pdfJobDurationLabel(job) {
+  const end = job.finishedAt || Date.now();
+  const seconds = Math.max(0, Math.round((end - job.startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function renderPdfJobs() {
+  const container = document.getElementById('pdfJobsList');
+  if (!container) return;
+  if (reportsState.pdfJobs.length === 0) {
+    container.innerHTML = '';
+    return;
   }
+
+  container.innerHTML = reportsState.pdfJobs.map((job) => {
+    const statusLabel = job.status === 'running' ? 'Generating…' : job.status === 'done' ? 'Done' : 'Failed';
+    const statusClass = job.status === 'running' ? 'pdf-job-running' : job.status === 'done' ? 'pdf-job-done' : 'pdf-job-error';
+    const errorLine = job.error ? `<div class="pdf-job-error-text">${escapeHtml(job.error.slice(0, 200))}</div>` : '';
+    return `<div class="pdf-job ${statusClass}">
+      <span class="pdf-job-company">${escapeHtml(job.company)}</span>
+      <span class="pdf-job-status">${statusLabel}</span>
+      <span class="pdf-job-duration">${pdfJobDurationLabel(job)}</span>
+      ${errorLine}
+    </div>`;
+  }).join('\n');
 }
 
 async function reportInfoForUrl(url) {

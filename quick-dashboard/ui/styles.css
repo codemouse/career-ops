@@ -608,26 +608,6 @@ button.secondary:hover {
   margin: 0;
 }
 
-.pipeline-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 4px;
-  white-space: nowrap;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.pipeline-toggle input[type='checkbox'] {
-  width: auto;
-  margin: 0;
-}
-
-.hidden-count {
-  color: var(--accent, #2f6fed);
-  font-weight: 600;
-}
-
 label {
   display: block;
   margin-bottom: 10px;
@@ -1230,11 +1210,6 @@ th {
   font-size: 11px;
 }
 
-.pipeline-table .added-cell {
-  white-space: nowrap;
-  color: var(--chip-summary-text);
-}
-
 .pipeline-table .flags-cell {
   display: flex;
   flex-wrap: wrap;
@@ -1513,15 +1488,41 @@ body.chaos-polish .card {
 
 /* ── Analytics ─────────────────────────────────────────── */
 
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.analytics-card-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .analytics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chart-wrap {
   padding: 12px 0;
   overflow-x: auto;
+  position: relative;
 }
 
-.bar-chart {
+.bar-chart, .donut-chart, .timeseries-chart {
   width: 100%;
   max-width: 560px;
   display: block;
+}
+
+.donut-wrap, .timeseries-wrap, .barchart-wrap {
+  position: relative;
+}
+
+.donut-chart {
+  max-width: 240px;
 }
 
 .chart-empty {
@@ -1529,6 +1530,80 @@ body.chaos-polish .card {
   font-size: 0.9rem;
   padding: 24px 0;
   text-align: center;
+}
+
+.chart-hover-target {
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.chart-hover-target:hover {
+  opacity: 0.72;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  background: var(--card-bg-top);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transform: translate(-50%, calc(-100% - 10px));
+  transition: opacity 100ms ease;
+  white-space: nowrap;
+}
+
+.chart-tooltip.is-visible {
+  opacity: 1;
+}
+
+.donut-center-label {
+  font: 700 20px system-ui, sans-serif;
+  fill: var(--ink);
+  text-anchor: middle;
+}
+
+.donut-center-sublabel {
+  font: 12px system-ui, sans-serif;
+  fill: var(--muted);
+  text-anchor: middle;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding-left: 4px;
+}
+
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink);
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+.chart-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.chart-legend-item .chart-legend-value {
+  color: var(--muted);
 }
 
 /* ── Reports ────────────────────────────────────────────── */
@@ -1540,8 +1615,13 @@ body.chaos-polish .card {
 }
 
 .reports-list-col {
-  width: 300px;
+  width: 360px;
   flex-shrink: 0;
+}
+
+.reports-search-input {
+  width: 100%;
+  margin: 0 0 8px;
 }
 
 .reports-viewer-col {
@@ -1849,6 +1929,72 @@ body.chaos-polish .card {
   margin-bottom: 14px;
 }
 
+/* Reports tab: one card per concurrent "Create PDF On Demand" run, so it's
+   clear which company is generating when more than one is queued. */
+.pdf-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+
+.pdf-job {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.pdf-job-company {
+  font-weight: 600;
+}
+
+.pdf-job-duration {
+  margin-left: auto;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.pdf-job-error-text {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: #c92a2a;
+}
+
+.pdf-job.pdf-job-running {
+  border-color: #f5d59a;
+  background: #fff4e0;
+}
+
+.pdf-job.pdf-job-running .pdf-job-status {
+  color: #f08c00;
+  font-weight: 600;
+}
+
+.pdf-job.pdf-job-done {
+  border-color: #b2e8bb;
+  background: #ebfbee;
+}
+
+.pdf-job.pdf-job-done .pdf-job-status {
+  color: #2b8a3e;
+  font-weight: 600;
+}
+
+.pdf-job.pdf-job-error {
+  border-color: #f3b4b4;
+  background: #fdeeee;
+}
+
+.pdf-job.pdf-job-error .pdf-job-status {
+  color: #c92a2a;
+  font-weight: 700;
+}
+
 .eval-job {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2114,6 +2260,37 @@ html.theme-dark .chip.ops-chip-bad {
   border-color: #8a3a3a;
   color: #f19b9b;
   background: #331d1d;
+}
+
+html.theme-dark .pdf-job.pdf-job-running {
+  border-color: #a1731e;
+  background: #332810;
+}
+
+html.theme-dark .pdf-job.pdf-job-running .pdf-job-status {
+  color: #f0b35c;
+}
+
+html.theme-dark .pdf-job.pdf-job-done {
+  border-color: #2f7a4d;
+  background: #123420;
+}
+
+html.theme-dark .pdf-job.pdf-job-done .pdf-job-status {
+  color: #7fd9ac;
+}
+
+html.theme-dark .pdf-job.pdf-job-error {
+  border-color: #8a3a3a;
+  background: #331d1d;
+}
+
+html.theme-dark .pdf-job.pdf-job-error .pdf-job-status {
+  color: #f19b9b;
+}
+
+html.theme-dark .pdf-job-error-text {
+  color: #f19b9b;
 }
 
 html.theme-dark .item-actions .action-unhide {
