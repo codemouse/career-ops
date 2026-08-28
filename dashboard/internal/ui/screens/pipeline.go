@@ -564,7 +564,7 @@ func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 		if msg.Err != "" {
 			m.flash = "Could not launch re-authentication for " + msg.PluginID + ": " + msg.Err
 		} else {
-			m.flash = "Opened a terminal to re-authenticate " + msg.PluginID + " — come back here when done and press R to re-check"
+			m.flash = "Opened a terminal to re-authenticate " + msg.PluginID + " — come back here when done and press r to re-check"
 		}
 		return m, nil
 	case pipelineStartDiscardPickerMsg:

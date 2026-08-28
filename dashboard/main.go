@@ -137,7 +137,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case screens.PipelineRefreshMsg:
 		m.reloadPipelineData()
-		return m, nil
+		path := m.careerOpsPath
+		return m, checkPluginAuth(screens.PipelineCheckPluginAuthMsg{CareerOpsPath: path})
 
 	case screens.PipelineOpenReportMsg:
 		m.viewer = screens.NewViewerModel(
