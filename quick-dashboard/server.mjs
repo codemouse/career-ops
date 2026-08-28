@@ -55,6 +55,21 @@ function handleApi(req, res, path) {
     return json(res, 200, readTracker());
   }
 
+  if (req.method === 'GET' && path === '/api/plugins/status') {
+    const out = runNode(['plugins.mjs', 'status', '--json']);
+    if (out.status !== 0) return json(res, 500, { error: out.stderr || out.stdout || 'plugins.mjs status failed' });
+    try { return json(res, 200, { plugins: JSON.parse(out.stdout) }); }
+    catch { return json(res, 500, { error: 'could not parse plugins.mjs status output' }); }
+  }
+
+  if (req.method === 'POST' && path === '/api/plugins/gmail/reauth/start') {
+    return json(res, 200, startGmailReauth());
+  }
+
+  if (req.method === 'GET' && path === '/api/plugins/gmail/reauth/status') {
+    return json(res, 200, gmailReauthStatus());
+  }
+
   if (req.method === 'POST' && path === '/api/scan') {
     const scanOut = runNode(['scan.mjs']);
     // Generous timeout: the engine's default 15s doesn't actually cancel the
@@ -1505,6 +1520,90 @@ function runNode(args) {
     stdout: (result.stdout || '').trim(),
     stderr: (result.stderr || '').trim(),
   };
+}
+
+// gmail reauth is interactive by nature (opens a Google consent page, waits
+// for the browser redirect) — it can't be a request/response API call. This
+// module-level session tracks the one in-flight child process: the start
+// endpoint spawns it and returns as soon as the auth URL shows up in stdout,
+// the status endpoint is polled by the page until the process exits.
+// Only one at a time (the script binds a fixed local port anyway).
+let gmailReauthSession = null;
+
+// If nobody completes the Google consent flow, reauth.mjs waits on its local
+// callback server forever — kill it so it can't squat port 53682 and break
+// every later reauth attempt with an opaque EADDRINUSE.
+const GMAIL_REAUTH_TIMEOUT_MS = 5 * 60 * 1000;
+
+function killGmailReauthSession() {
+  if (gmailReauthSession?.child && gmailReauthSession.state === 'pending') {
+    gmailReauthSession.child.kill();
+  }
+  if (gmailReauthSession?.timer) clearTimeout(gmailReauthSession.timer);
+}
+process.on('exit', killGmailReauthSession);
+// 'exit' alone isn't reliable for every shutdown path (e.g. plain SIGINT from
+// Ctrl+C doesn't always reach it before the process is gone) — handle the
+// common signals explicitly so a killed dashboard doesn't leave reauth.mjs
+// squatting port 53682.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { killGmailReauthSession(); process.exit(0); });
+}
+
+function startGmailReauth() {
+  if (gmailReauthSession && gmailReauthSession.state === 'pending') {
+    return { ok: true, pending: true };
+  }
+
+  const session = { state: 'pending', authUrl: null, stdout: '', stderr: '' };
+  gmailReauthSession = session;
+
+  const child = spawn('node', ['plugins/gmail/reauth.mjs', '--write-env'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  session.child = child;
+  session.timer = setTimeout(() => {
+    if (session.state === 'pending') {
+      session.child.kill();
+      session.state = 'error';
+      session.stderr += '\nTimed out waiting for Google sign-in — click Re-authenticate to try again.';
+    }
+  }, GMAIL_REAUTH_TIMEOUT_MS);
+
+  child.stdout.on('data', (chunk) => {
+    session.stdout += chunk;
+    if (!session.authUrl) {
+      const m = session.stdout.match(/https:\/\/accounts\.google\.com\/\S+/);
+      if (m) session.authUrl = m[0];
+    }
+  });
+  child.stderr.on('data', (chunk) => {
+    session.stderr += chunk;
+    // A previous session's child can outlive a server restart (it's not
+    // detached, but nothing guarantees a clean parent-exit signal on every
+    // dev workflow — e.g. a killed terminal) and squat the fixed local port.
+    // Surface that plainly instead of the raw EADDRINUSE stack.
+    if (/EADDRINUSE/.test(chunk)) {
+      session.stderr += '\nAnother re-authentication attempt is still running in the background (port 53682 is in use). Wait a few minutes for it to time out, or find and stop the stray `node plugins/gmail/reauth.mjs` process yourself.';
+    }
+  });
+  child.on('error', (err) => {
+    session.state = 'error';
+    session.stderr += String(err?.message || err);
+  });
+  child.on('close', (code) => {
+    clearTimeout(session.timer);
+    session.state = code === 0 ? 'success' : 'error';
+  });
+
+  return { ok: true, pending: true };
+}
+
+function gmailReauthStatus() {
+  if (!gmailReauthSession) return { state: 'idle' };
+  const { state, authUrl, stdout, stderr } = gmailReauthSession;
+  return { state, authUrl, stdout, stderr };
 }
 
 // Report filenames are `{NNN}-{company-slug}-{YYYY-MM-DD}.md` (see

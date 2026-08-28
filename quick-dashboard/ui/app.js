@@ -45,6 +45,9 @@ const rulesPanel = document.getElementById('rulesPanel');
 const dashboardTitle = document.getElementById('dashboardTitle');
 const brandTagline = document.getElementById('brandTagline');
 const toastRack = document.getElementById('toastRack');
+const pluginAuthBanner = document.getElementById('pluginAuthBanner');
+const pluginAuthBannerText = document.getElementById('pluginAuthBannerText');
+const pluginAuthReauthBtn = document.getElementById('pluginAuthReauthBtn');
 const goblinHint = document.getElementById('goblinHint');
 const stateSelect = document.getElementById('stateSelect');
 const statusForm = document.getElementById('statusForm');
@@ -173,6 +176,7 @@ const pipelineFilters = {
 refreshBtn.addEventListener('click', loadAll);
 scanBtn.addEventListener('click', runScan);
 enrichPendingBtn?.addEventListener('click', runEnrichPending);
+pluginAuthReauthBtn?.addEventListener('click', startGmailReauth);
 statusForm.addEventListener('submit', submitStatus);
 startTabBtn?.addEventListener('click', () => setActiveTab('start'));
 pipelineTabBtn?.addEventListener('click', () => setActiveTab('pipeline'));
@@ -433,7 +437,7 @@ async function loadAll() {
   // trackerState.availableStates populated before rows render, or the first
   // paint would offer only whatever status each row already has.
   await loadStates();
-  await Promise.all([loadTracker(), loadPipeline(), loadOpsBaseline()]);
+  await Promise.all([loadTracker(), loadPipeline(), loadOpsBaseline(), loadPluginAuthStatus()]);
 }
 
 async function loadFitFilters() {
@@ -2624,6 +2628,80 @@ async function runEnrichPending() {
   } finally {
     enrichPendingBtn.disabled = false;
     enrichPendingBtn.textContent = 'Enrich Pending';
+  }
+}
+
+// Only gmail ships a reauth script today; the banner/button hardcode it, and
+// this list is what decides whether the banner shows at all.
+const REAUTHABLE_PLUGINS = new Set(['gmail']);
+
+async function loadPluginAuthStatus() {
+  if (!pluginAuthBanner) return;
+  try {
+    const data = await api('/api/plugins/status');
+    const broken = (data.plugins || []).filter((p) => p.needsReauth && REAUTHABLE_PLUGINS.has(p.id));
+    if (broken.length === 0) {
+      pluginAuthBanner.hidden = true;
+      return;
+    }
+    const names = broken.map((p) => p.id).join(', ');
+    pluginAuthBannerText.textContent = `⚠ ${names} needs re-authentication — the job scanner won't pick up new leads from it until fixed.`;
+    pluginAuthBanner.hidden = false;
+  } catch {
+    // Best-effort signal — a failed status check should never block the rest of the dashboard.
+  }
+}
+
+// gmail's reauth flow is interactive (opens a Google consent page in a new
+// tab, waits for the OAuth redirect), so this can't be a single request/response
+// call — it starts the server-side helper, opens the auth URL as soon as the
+// server captures it, then polls until the helper process exits.
+async function startGmailReauth() {
+  pluginAuthReauthBtn.disabled = true;
+  pluginAuthReauthBtn.textContent = 'Starting...';
+  try {
+    await api('/api/plugins/gmail/reauth/start', { method: 'POST' });
+    showToast('Opening Google sign-in for Gmail re-authentication…', 'success');
+    await pollGmailReauth();
+  } catch (err) {
+    showToast(formatActionError('Could not start re-authentication', err), 'error');
+    pluginAuthReauthBtn.disabled = false;
+    pluginAuthReauthBtn.textContent = 'Re-authenticate';
+  }
+}
+
+async function pollGmailReauth() {
+  let openedAuthUrl = false;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let status;
+    try {
+      status = await api('/api/plugins/gmail/reauth/status');
+    } catch {
+      continue; // transient — keep polling rather than abandoning an in-flight reauth
+    }
+
+    if (!openedAuthUrl && status.authUrl) {
+      openedAuthUrl = true;
+      window.open(status.authUrl, '_blank', 'noopener');
+      pluginAuthReauthBtn.textContent = 'Waiting for sign-in...';
+    }
+
+    if (status.state === 'success') {
+      showToast('Gmail re-authenticated — .env updated.', 'success');
+      pluginAuthReauthBtn.disabled = false;
+      pluginAuthReauthBtn.textContent = 'Re-authenticate';
+      await loadPluginAuthStatus();
+      return;
+    }
+    if (status.state === 'error') {
+      const detail = (status.stderr || status.stdout || '').trim().split('\n').filter(Boolean).slice(-2).join(' — ');
+      showToast(formatActionError('Gmail re-authentication failed', new Error(detail || 'unknown error')), 'error');
+      pluginAuthReauthBtn.disabled = false;
+      pluginAuthReauthBtn.textContent = 'Re-authenticate';
+      return;
+    }
+    // state === 'pending': keep polling.
   }
 }
 

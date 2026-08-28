@@ -1093,6 +1093,28 @@ th {
   font-weight: 700;
 }
 
+.plugin-auth-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #f3b4b4;
+  background: #fdeeee;
+  color: #c92a2a;
+  font-weight: 600;
+}
+
+.plugin-auth-banner[hidden] {
+  display: none;
+}
+
+.plugin-auth-banner button {
+  border-color: #c92a2a;
+  color: #c92a2a;
+  background: #fff;
+}
+
 .item-actions .action-unhide {
   border-color: #14844a;
   color: #0e6c3c;
@@ -2260,6 +2282,18 @@ html.theme-dark .chip.ops-chip-bad {
   border-color: #8a3a3a;
   color: #f19b9b;
   background: #331d1d;
+}
+
+html.theme-dark .plugin-auth-banner {
+  border-bottom-color: #8a3a3a;
+  background: #331d1d;
+  color: #f19b9b;
+}
+
+html.theme-dark .plugin-auth-banner button {
+  border-color: #f19b9b;
+  color: #f19b9b;
+  background: #241414;
 }
 
 html.theme-dark .pdf-job.pdf-job-running {

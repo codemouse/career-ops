@@ -12,6 +12,9 @@
 // Desktop client itself doesn't expire — only the refresh token does).
 
 import { createServer } from 'http';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { loadDotenvOnce } from '../_engine.mjs';
 
 await loadDotenvOnce();
@@ -19,6 +22,22 @@ await loadDotenvOnce();
 const PORT = 53682; // arbitrary local port; loopback redirects don't need pre-registration for Desktop clients
 const REDIRECT_URI = `http://127.0.0.1:${PORT}/callback`;
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+// --write-env: used by the quick-dashboard reauth flow, which drives this
+// script headlessly and can't ask the user to hand-paste a token into .env.
+// Off by default so the plain terminal flow (`node plugins/gmail/reauth.mjs`)
+// is unchanged — printing the token and letting the user paste it themselves.
+const writeEnv = process.argv.includes('--write-env');
+const ENV_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.env');
+
+/** Replace GMAIL_REFRESH_TOKEN=... in .env if present, else append it. Preserves every other line verbatim. */
+function updateEnvRefreshToken(token) {
+  const line = `GMAIL_REFRESH_TOKEN=${token}`;
+  if (!existsSync(ENV_PATH)) { writeFileSync(ENV_PATH, `${line}\n`); return; }
+  const text = readFileSync(ENV_PATH, 'utf8');
+  const re = /^GMAIL_REFRESH_TOKEN=.*$/m;
+  const next = re.test(text) ? text.replace(re, line) : `${text.replace(/\n?$/, '\n')}${line}\n`;
+  writeFileSync(ENV_PATH, next);
+}
 
 const clientId = process.env.GMAIL_CLIENT_ID;
 const clientSecret = process.env.GMAIL_CLIENT_SECRET;
@@ -80,10 +99,15 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Success — you can close this tab and return to the terminal.');
 
-    console.log('✓ New refresh token:\n');
-    console.log(`GMAIL_REFRESH_TOKEN=${data.refresh_token}\n`);
-    console.log('Paste that into .env (replacing the old GMAIL_REFRESH_TOKEN line), then verify with:');
-    console.log('  node plugins.mjs run gmail --dry-run\n');
+    if (writeEnv) {
+      updateEnvRefreshToken(data.refresh_token);
+      console.log('✓ .env updated with the new GMAIL_REFRESH_TOKEN.\n');
+    } else {
+      console.log('✓ New refresh token:\n');
+      console.log(`GMAIL_REFRESH_TOKEN=${data.refresh_token}\n`);
+      console.log('Paste that into .env (replacing the old GMAIL_REFRESH_TOKEN line), then verify with:');
+      console.log('  node plugins.mjs run gmail --dry-run\n');
+    }
   } catch (err) {
     console.error(`✗ ${err.message}`);
   } finally {
