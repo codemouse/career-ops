@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -77,7 +78,7 @@ func enrichArchetypes(careerOpsPath string, apps []model.CareerApplication, pm *
 }
 
 func (m appModel) Init() tea.Cmd {
-	return nil
+	return checkPluginAuth(screens.PipelineCheckPluginAuthMsg{CareerOpsPath: m.careerOpsPath})
 }
 
 // Update manages global app state and routes incoming messages to active screens.
@@ -227,6 +228,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screens.PipelineGeneratePDFMsg:
 		return m, runGeneratePDF(msg)
 
+	case screens.PipelineCheckPluginAuthMsg:
+		return m, checkPluginAuth(msg)
+
+	case screens.PipelineReauthMsg:
+		return m, runReauth(msg)
+
 	default:
 		if m.state == viewReport {
 			vm, cmd := m.viewer.Update(msg)
@@ -284,6 +291,60 @@ func runGeneratePDF(msg screens.PipelineGeneratePDFMsg) tea.Cmd {
 			return screens.PipelinePDFGeneratedMsg{Err: fmt.Sprintf("PDF generated but could not open: %v", err)}
 		}
 		return screens.PipelinePDFGeneratedMsg{Path: pdfAbs}
+	}
+}
+
+// checkPluginAuth shells out to `node plugins.mjs status --json` and parses
+// its array of {id, enabled, configured, missingEnv, needsReauth, error, at}
+// entries into the pipeline screen's PluginAuthStatus slice. Runs once on
+// startup and again on manual refresh (R) — never on every render, since
+// shelling out to node on each frame would stutter the UI.
+//
+// On any failure (node missing, non-zero exit, malformed JSON) it reports
+// the error via Err and leaves the pipeline screen's existing statuses
+// alone, so a transient hiccup doesn't flap the warning banner off.
+func checkPluginAuth(msg screens.PipelineCheckPluginAuthMsg) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("node", "plugins.mjs", "status", "--json")
+		cmd.Dir = msg.CareerOpsPath
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return screens.PipelinePluginAuthMsg{Err: summarizeCmdError(err, out)}
+		}
+		var statuses []screens.PluginAuthStatus
+		if err := json.Unmarshal(out, &statuses); err != nil {
+			return screens.PipelinePluginAuthMsg{Err: fmt.Sprintf("could not parse plugin status: %v", err)}
+		}
+		return screens.PipelinePluginAuthMsg{Statuses: statuses}
+	}
+}
+
+// pluginReauthScripts maps a plugin ID to its interactive reauth script,
+// relative to the career-ops root. Gmail is the only plugin with one today;
+// extend this map if/when other plugins gain a reauth flow.
+var pluginReauthScripts = map[string]string{
+	"gmail": "plugins/gmail/reauth.mjs",
+}
+
+// runReauth launches the reauth script for msg.PluginID in a new, visible
+// terminal window. The script is interactive (it opens a browser and waits
+// for the user's OAuth consent), so it must never run headlessly inside this
+// tea.Cmd goroutine — openTerminalRunning hands it off to a real terminal
+// and returns immediately.
+func runReauth(msg screens.PipelineReauthMsg) tea.Cmd {
+	return func() tea.Msg {
+		script, ok := pluginReauthScripts[msg.PluginID]
+		if !ok {
+			return screens.PipelineReauthLaunchedMsg{
+				PluginID: msg.PluginID,
+				Err:      fmt.Sprintf("no re-authentication script known for plugin %q", msg.PluginID),
+			}
+		}
+		command := "node " + script
+		if err := openTerminalRunning(msg.CareerOpsPath, command); err != nil {
+			return screens.PipelineReauthLaunchedMsg{PluginID: msg.PluginID, Err: err.Error()}
+		}
+		return screens.PipelineReauthLaunchedMsg{PluginID: msg.PluginID}
 	}
 }
 

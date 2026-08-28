@@ -24,7 +24,7 @@
  * all reuse it with no prod-vs-test drift.
  */
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { resolveAndValidate } from './_net.mjs';
@@ -650,9 +650,11 @@ export async function runHook(kind, payload, { root, dryRun = false, timeoutMs =
     try {
       const result = await Promise.race([invoke, timeout]);
       results.push({ id, ok: true, result });
+      recordAuthStatus(root, id, true);
     } catch (err) {
       warnSkip(id, `${kind} hook failed — ${err.message}`);
       results.push({ id, ok: false, error: err.message });
+      recordAuthStatus(root, id, false, err.message);
     } finally {
       clearTimeout(timer);
     }
@@ -662,6 +664,35 @@ export async function runHook(kind, payload, { root, dryRun = false, timeoutMs =
 
 export function filterResultsForId(results, id) {
   return results.filter(r => r.id === id);
+}
+
+/** Status file: cross-tool signal for "a plugin needs re-auth". User layer, gitignored with data/. */
+function pluginStatusPath(root) { return path.join(root, 'data', 'plugin-status.json'); }
+
+/** Matches the auth-class errors that a re-run can't fix on its own (revoked/expired token, bad creds). */
+const AUTH_ERROR_RE = /invalid_grant|invalid_client|unauthorized_client|invalid_token|401|token.*(expired|revoked)/i;
+
+/**
+ * Persist "needs re-auth" for a plugin id, or clear it on a successful hook run.
+ * Fail-open: any read/write error is swallowed — this is a convenience signal,
+ * never load-bearing for the hook's own result.
+ */
+function recordAuthStatus(root, id, ok, errorMessage) {
+  const p = pluginStatusPath(root);
+  let state = {};
+  try { state = existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : {}; } catch { state = {}; }
+  if (ok) {
+    if (state[id]) { delete state[id]; } else { return; }
+  } else {
+    if (!AUTH_ERROR_RE.test(errorMessage || '')) return;
+    state[id] = { needsReauth: true, error: errorMessage, at: new Date().toISOString() };
+  }
+  try { writeFileSync(p, JSON.stringify(state, null, 2) + '\n'); } catch { /* best-effort */ }
+}
+
+/** Read current plugin auth-status signals (id -> {needsReauth, error, at}). Never throws. */
+export function readPluginAuthStatus(root) {
+  try { return JSON.parse(readFileSync(pluginStatusPath(root), 'utf8')); } catch { return {}; }
 }
 
 /**

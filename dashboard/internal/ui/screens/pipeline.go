@@ -95,6 +95,49 @@ type PipelineOpenProgressMsg struct{}
 // PipelineOpenStatsMsg is emitted when the stats (dimension breakdown) screen should open.
 type PipelineOpenStatsMsg struct{}
 
+// PluginAuthStatus mirrors one entry of `node plugins.mjs status --json`'s
+// output — one discovered plugin's enablement/auth health.
+type PluginAuthStatus struct {
+	ID          string   `json:"id"`
+	Enabled     bool     `json:"enabled"`
+	Configured  bool     `json:"configured"`
+	MissingEnv  []string `json:"missingEnv"`
+	NeedsReauth bool     `json:"needsReauth"`
+	Error       string   `json:"error"`
+	At          string   `json:"at"`
+}
+
+// PipelineCheckPluginAuthMsg requests a fresh `node plugins.mjs status
+// --json` poll. Fired once on startup and again on manual refresh (R) or
+// after the user returns from a reauth flow.
+type PipelineCheckPluginAuthMsg struct {
+	CareerOpsPath string
+}
+
+// PipelinePluginAuthMsg delivers the outcome of a plugin-status poll back to
+// the pipeline model. On failure Err is set and Statuses is left as-is
+// (whatever was previously known), so a transient node/CLI hiccup doesn't
+// flap the warning banner off.
+type PipelinePluginAuthMsg struct {
+	Statuses []PluginAuthStatus
+	Err      string
+}
+
+// PipelineReauthMsg requests that the reauth helper for PluginID be launched
+// in a new, visible terminal window (it is interactive and blocks on user
+// browser interaction, so it cannot run headlessly inside a tea.Cmd).
+type PipelineReauthMsg struct {
+	CareerOpsPath string
+	PluginID      string
+}
+
+// PipelineReauthLaunchedMsg reports the outcome of launching the reauth
+// terminal window. On success Err is empty.
+type PipelineReauthLaunchedMsg struct {
+	PluginID string
+	Err      string
+}
+
 var canonicalDiscardReasons = []string{
 	"salary_too_low",
 	"hybrid_required",
@@ -304,6 +347,13 @@ type PipelineModel struct {
 	// Hired win flow sub-state (Issue 1447)
 	hiredApp  model.CareerApplication
 	hiredStep int // 0 = inactive, 1 = celebration, 2 = story invite, 3 = anonymous stat
+
+	// Plugin auth-status sub-state. Polled once on startup and again on
+	// manual refresh (R) or after the user returns from a reauth flow — never
+	// on every render, since the poll shells out to node.
+	pluginAuthStatuses []PluginAuthStatus
+	pluginAuthErr      string // last poll error, if any; statuses are kept stale rather than cleared
+	reauthInFlight     bool   // true while a terminal-launch request is pending, to avoid double-launch on repeat keypress
 }
 
 // IsTextInputActive returns true if the search or any other text input is currently focused
@@ -405,6 +455,13 @@ func (m PipelineModel) WithReloadedData(apps []model.CareerApplication, metrics 
 	reloaded.discardPendingApp = m.discardPendingApp
 	reloaded.discardPendingStatus = m.discardPendingStatus
 	reloaded.discardPredictedCount = m.discardPredictedCount
+	// Preserve the plugin auth-status poll across a data reload — reloading
+	// the tracker has nothing to do with plugin health, and re-deriving it
+	// would mean either dropping the banner on every refresh or re-shelling
+	// out to node synchronously here.
+	reloaded.pluginAuthStatuses = m.pluginAuthStatuses
+	reloaded.pluginAuthErr = m.pluginAuthErr
+	reloaded.reauthInFlight = m.reauthInFlight
 	reloaded.applyFilterAndSort()
 	reloaded.CopyReportCache(&m)
 
@@ -444,6 +501,19 @@ func (m PipelineModel) CurrentApp() (model.CareerApplication, bool) {
 	return m.filtered[m.cursor], true
 }
 
+// pluginsNeedingReauth returns the IDs of every discovered plugin whose last
+// status poll reported needsReauth. Empty when everything is healthy or no
+// poll has completed yet.
+func (m PipelineModel) pluginsNeedingReauth() []string {
+	var ids []string
+	for _, s := range m.pluginAuthStatuses {
+		if s.NeedsReauth {
+			ids = append(ids, s.ID)
+		}
+	}
+	return ids
+}
+
 // Update handles input for the pipeline screen.
 func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -477,6 +547,24 @@ func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 			m.flash = "PDF regeneration failed: " + msg.Err
 		} else {
 			m.flash = "PDF regenerated and opened: " + filepath.Base(msg.Path)
+		}
+		return m, nil
+	case PipelinePluginAuthMsg:
+		if msg.Err != "" {
+			// Keep the previously known statuses (and banner state) rather
+			// than clearing them on a transient node/CLI failure.
+			m.pluginAuthErr = msg.Err
+		} else {
+			m.pluginAuthStatuses = msg.Statuses
+			m.pluginAuthErr = ""
+		}
+		return m, nil
+	case PipelineReauthLaunchedMsg:
+		m.reauthInFlight = false
+		if msg.Err != "" {
+			m.flash = "Could not launch re-authentication for " + msg.PluginID + ": " + msg.Err
+		} else {
+			m.flash = "Opened a terminal to re-authenticate " + msg.PluginID + " — come back here when done and press R to re-check"
 		}
 		return m, nil
 	case pipelineStartDiscardPickerMsg:
@@ -672,6 +760,26 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 
 	case "r":
 		return m, func() tea.Msg { return PipelineRefreshMsg{} }
+
+	case "R":
+		// When a plugin needs re-authentication, launch its reauth helper in
+		// a new terminal window (it's interactive and would hang the TUI if
+		// run headlessly). Otherwise just re-poll plugin status.
+		needing := m.pluginsNeedingReauth()
+		if len(needing) == 0 {
+			path := m.careerOpsPath
+			return m, func() tea.Msg { return PipelineCheckPluginAuthMsg{CareerOpsPath: path} }
+		}
+		if m.reauthInFlight {
+			return m, nil
+		}
+		m.reauthInFlight = true
+		// Only gmail ships a reauth script today; extend this mapping if/when
+		// other plugins gain one.
+		pluginID := needing[0]
+		path := m.careerOpsPath
+		m.flash = "Launching re-authentication for " + pluginID + "..."
+		return m, func() tea.Msg { return PipelineReauthMsg{CareerOpsPath: path, PluginID: pluginID} }
 
 	case "C":
 		m.colPicker = true
@@ -1240,6 +1348,9 @@ func (m PipelineModel) chromeRowsFixed() int {
 	if m.searchInput || m.searchQuery != "" {
 		rows++
 	}
+	if len(m.pluginsNeedingReauth()) > 0 {
+		rows++
+	}
 	return rows
 }
 
@@ -1298,6 +1409,7 @@ func (m PipelineModel) View() string {
 	}
 
 	header := m.renderHeader()
+	authBanner := m.renderPluginAuthBanner()
 	tabs := m.renderTabs()
 	metricsBar := m.renderMetrics()
 	sortBar := m.renderSortBar()
@@ -1343,12 +1455,37 @@ func (m PipelineModel) View() string {
 		body = m.overlayDiscardPicker(body)
 	}
 
-	sections := []string{header, tabs, metricsBar, sortBar}
+	sections := []string{header}
+	if authBanner != "" {
+		sections = append(sections, authBanner)
+	}
+	sections = append(sections, tabs, metricsBar, sortBar)
 	if searchBar != "" {
 		sections = append(sections, searchBar)
 	}
 	sections = append(sections, m.renderColumnHeader(), body, preview, help)
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// renderPluginAuthBanner returns an empty string when no discovered plugin
+// currently needs re-authentication (including when no poll has completed
+// yet). Otherwise it renders a single warning-colored row naming the
+// plugin(s) and the key that launches the fix.
+func (m PipelineModel) renderPluginAuthBanner() string {
+	needing := m.pluginsNeedingReauth()
+	if len(needing) == 0 {
+		return ""
+	}
+
+	style := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(m.theme.Base).
+		Background(m.theme.Red).
+		Width(m.width).
+		Padding(0, 2)
+
+	text := fmt.Sprintf(i18n.Current.PluginAuthWarning, strings.Join(needing, ", "))
+	return style.Render("⚠ " + text)
 }
 
 // renderSearchBar returns an empty string when there is no active or in-progress
@@ -1996,6 +2133,12 @@ func (m PipelineModel) renderHelp() string {
 		keyStyle.Render("/") + descStyle.Render(i18n.Current.HelpSearch) +
 		keyStyle.Render("s") + descStyle.Render(i18n.Current.HelpSort) +
 		keyStyle.Render("r") + descStyle.Render(i18n.Current.HelpRefresh) +
+		func() string {
+			if len(m.pluginsNeedingReauth()) == 0 {
+				return ""
+			}
+			return keyStyle.Render("R") + descStyle.Render(i18n.Current.HelpReauth)
+		}() +
 		keyStyle.Render("Enter") + descStyle.Render(i18n.Current.HelpReport) +
 		keyStyle.Render("o") + descStyle.Render(i18n.Current.HelpOpenURL) +
 		keyStyle.Render("d") + descStyle.Render(i18n.Current.HelpOpenPDF) +

@@ -117,12 +117,16 @@ type Catalog struct {
 	RateInterview string
 	RateOffer     string
 
+	// Plugin auth-status banner (pipeline screen)
+	PluginAuthWarning string
+
 	// Footer descriptions & hints
 	HelpNav        string
 	HelpTabs       string
 	HelpSearch     string
 	HelpSort       string
 	HelpRefresh    string
+	HelpReauth     string
 	HelpReport     string
 	HelpOpenURL    string
 	HelpOpenPDF    string
@@ -392,12 +396,16 @@ var En = Catalog{
 	RateInterview: "Interview Rate: ",
 	RateOffer:     "Offer Rate: ",
 
+	// Plugin auth-status banner (pipeline screen)
+	PluginAuthWarning: "%s needs re-authentication — press R to fix",
+
 	// Footer descriptions & hints
 	HelpNav:        " nav  ",
 	HelpTabs:       " tabs  ",
 	HelpSearch:     " search  ",
 	HelpSort:       " sort  ",
 	HelpRefresh:    " refresh  ",
+	HelpReauth:     " reauth  ",
 	HelpReport:     " report  ",
 	HelpOpenURL:    " open URL  ",
 	HelpOpenPDF:    " open PDF  ",
@@ -556,12 +564,16 @@ var Tr = Catalog{
 	RateInterview: "Mülakat Oranı: ",
 	RateOffer:     "Teklif Oranı: ",
 
+	// Plugin auth-status banner (pipeline screen)
+	PluginAuthWarning: "%s yeniden kimlik doğrulaması gerektiriyor — düzeltmek için R'ye basın",
+
 	// Footer descriptions & hints
 	HelpNav:        " gezin  ",
 	HelpTabs:       " sekmeler  ",
 	HelpSearch:     " ara  ",
 	HelpSort:       " sırala  ",
 	HelpRefresh:    " yenile  ",
+	HelpReauth:     " kimlik doğrula  ",
 	HelpReport:     " rapor  ",
 	HelpOpenURL:    " URL aç  ",
 	HelpOpenPDF:    " PDF'i aç  ",
@@ -720,12 +732,16 @@ var Es = Catalog{
 	RateInterview: "Tasa de entrevistas: ",
 	RateOffer:     "Tasa de ofertas: ",
 
+	// Plugin auth-status banner (pipeline screen)
+	PluginAuthWarning: "%s necesita volver a autenticarse — presiona R para solucionarlo",
+
 	// Footer descriptions & hints
 	HelpNav:        " navegar  ",
 	HelpTabs:       " pestañas  ",
 	HelpSearch:     " buscar  ",
 	HelpSort:       " ordenar  ",
 	HelpRefresh:    " actualizar  ",
+	HelpReauth:     " reautenticar  ",
 	HelpReport:     " informe  ",
 	HelpOpenURL:    " abrir URL  ",
 	HelpOpenPDF:    " abrir PDF  ",

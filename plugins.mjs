@@ -24,6 +24,7 @@ import * as yaml from 'js-yaml';
 import {
   discoverPlugins, pluginRoots, loadPluginConfig, pluginStatus,
   runHook, filterResultsForId, loadDotenvOnce, HOOK_KINDS, loadSkill, resolveSuccessorIds,
+  readPluginAuthStatus,
 } from './plugins/_engine.mjs';
 import { loadRegistry, findInRegistry, classifySource, sourceBadge, successorFor } from './plugins/_registry.mjs';
 import { readLock, writeLockEntry, removeLockEntry, hashPluginTree, consentSurface } from './plugins/_lock.mjs';
@@ -117,6 +118,39 @@ async function cmdList() {
     console.log(`      ${m.description}`);
   }
   console.log('\nEnable in config/plugins.yml, add keys to .env, then `node plugins.mjs run <id>`.');
+}
+
+/**
+ * `node plugins.mjs status --json` — machine-readable "does any plugin need
+ * re-auth" signal, folding config-time missingEnv checks with the runtime
+ * auth-failure state runHook() persists to data/plugin-status.json. Consumed
+ * by the dashboard (shells out + parses stdout) so it never has to import ESM.
+ */
+async function cmdStatus(args) {
+  const asJson = args.includes('--json');
+  const cfg = await loadPluginConfig(ROOT);
+  const manifests = discoverPlugins(pluginRoots(ROOT), resolveSuccessorIds(ROOT));
+  const authState = readPluginAuthStatus(ROOT);
+  const out = manifests.map(m => {
+    const { enabled, configured, missingEnv } = pluginStatus(m, cfg);
+    const reauth = authState[m.id];
+    return {
+      id: m.id,
+      enabled,
+      configured,
+      missingEnv,
+      needsReauth: !!reauth?.needsReauth,
+      error: reauth?.error ?? null,
+      at: reauth?.at ?? null,
+    };
+  });
+  if (asJson) { console.log(JSON.stringify(out, null, 2)); return; }
+  const flagged = out.filter(p => p.needsReauth || (p.configured && p.missingEnv.length > 0));
+  if (flagged.length === 0) { console.log('All enabled plugins look healthy.'); return; }
+  for (const p of flagged) {
+    if (p.needsReauth) console.log(`⚠️  ${p.id}: needs re-authentication — ${p.error} (since ${p.at})`);
+    else console.log(`⚠️  ${p.id}: missing env: ${p.missingEnv.join(', ')}`);
+  }
 }
 
 async function cmdRun(args) {
@@ -358,6 +392,7 @@ async function main() {
   switch (cmd) {
     case undefined:
     case 'list': return cmdList();
+    case 'status': return cmdStatus(rest);
     case 'available': return cmdAvailable();
     case 'run': return cmdRun(rest);
     case 'skill': return cmdSkill(rest);
@@ -367,7 +402,7 @@ async function main() {
     case 'trust': return cmdTrust(rest);
     case 'remove': return cmdRemove(rest);
     default:
-      console.error('Usage: node plugins.mjs [list | available | run <id> [hook] | skill <id> | new <name> | add <name|owner/repo> [--sha <c>] [--confirm] | enable <id> [--confirm] | trust <id> | remove <id>]');
+      console.error('Usage: node plugins.mjs [list | status [--json] | available | run <id> [hook] | skill <id> | new <name> | add <name|owner/repo> [--sha <c>] [--confirm] | enable <id> [--confirm] | trust <id> | remove <id>]');
       process.exit(1);
   }
 }
