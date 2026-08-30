@@ -2318,19 +2318,26 @@ function makeRejectActionButton(item) {
     const rule = await promptRejectRule(item);
     if (!rule) return;
 
+    let result;
     try {
-      await api('/api/pipeline/process', {
+      result = await api('/api/pipeline/process', {
         method: 'POST',
         body: JSON.stringify({ item: rowPayload, action: 'reject', rejectRule: hasAnyRuleScope(rule) ? rule : null }),
       });
-      try {
-        await loadFitFilters();
-        await loadPipeline();
-      } catch (refreshErr) {
-        window.alert(formatActionError('Rejected, but refresh failed', refreshErr));
-      }
     } catch (err) {
       window.alert(formatActionError('Reject failed', err));
+      return;
+    }
+
+    if (result?.filterRuleError) {
+      window.alert(formatActionError('Rejected, but the filter rule was not saved', result.filterRuleError));
+    }
+
+    try {
+      await loadFitFilters();
+      await loadPipeline();
+    } catch (refreshErr) {
+      window.alert(formatActionError('Rejected, but refresh failed', refreshErr));
     }
   });
   return btn;

@@ -1316,7 +1316,15 @@ function movePipelineItemToProcessed(itemTarget, action = 'processed', rejectRul
 
     if (normalizedAction === 'reject' && rejectRuleInput) {
       const addResult = addFitFilterRule(rejectRuleInput);
-      if (!addResult.ok) return addResult;
+      // The pipeline line is already removed and written above — that's the
+      // reject itself. A bad/empty rule is a separate, best-effort step and
+      // must not make the whole reject look like it failed (the client only
+      // refreshes the pending list on ok:true, so returning ok:false here
+      // left rejected rows stuck on screen even though they were gone from
+      // pipeline.md).
+      if (!addResult.ok) {
+        return { ok: true, action: 'reject', filterRuleAdded: false, filterRuleError: addResult.error };
+      }
       return { ok: true, action: 'reject', filterRuleAdded: true, filterRule: addResult.rule };
     }
 
