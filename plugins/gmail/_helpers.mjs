@@ -21,25 +21,83 @@ export function extractUrls(body) {
   return [...new Set(urls)];
 }
 
+// LinkedIn's job-alert emails are full of same-domain chrome links (manage
+// alerts, messaging/feed/network glimmers, profile & company-logo images, the
+// "see all jobs" search-results page) that a keyword denylist can't keep up
+// with — none of them contain a word like "track" or "unsubscribe". A single
+// alert email can carry a dozen of these alongside the one real posting link,
+// and each carries LinkedIn's per-email tracking params, so they also show up
+// as look-alike duplicates across emails. Path-allowlist LinkedIn specifically
+// (only /jobs/view/{id} and /comm/jobs/view/{id} are individual postings);
+// every other domain (ATS boards, aggregators) keeps the permissive denylist
+// check since they don't share this problem and enumerating every legitimate
+// job board here would be fragile.
+const LINKEDIN_HOSTS = /(^|\.)linkedin\.com$/i;
+const LINKEDIN_JOB_VIEW_PATH = /^\/(comm\/)?jobs\/view\/\d+\/?$/i;
+
 /**
- * Is a URL clean and relevant (not a click tracker, unsubscribe link, or pixel)?
+ * Is a URL clean and relevant (not a click tracker, unsubscribe link, pixel,
+ * or — for LinkedIn specifically — nav chrome/asset link)?
  * @param {string} url
  * @returns {boolean}
  */
 export function isCleanUrl(url) {
   try {
     const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+
+    if (LINKEDIN_HOSTS.test(u.hostname)) {
+      return LINKEDIN_JOB_VIEW_PATH.test(u.pathname);
+    }
+    if (/(^|\.)licdn\.com$/i.test(u.hostname)) return false; // profile/company-logo image CDN, never a posting
+    // Glassdoor's own email chrome: brand/tracking-pixel endpoint and static
+    // logo/icon assets served from the same domain as real job links.
+    if (/(^|\.)glassdoor\.com$/i.test(u.hostname) && /^\/(brand-views|assets\/)/i.test(u.pathname)) return false;
+    // Substack's generic click-tracking redirect wrapper — never a posting
+    // itself, just how any link in a Substack email routes through their
+    // domain. Other substack.com paths are left alone in case a real job
+    // board is hosted there.
+    if (u.hostname.toLowerCase() === 'substack.com' && u.pathname.startsWith('/redirect/')) return false;
+    // Belt-and-suspenders for any board: an image asset is never a posting.
+    if (/\.(png|jpe?g|gif|svg|webp|ico)(\?|$)/i.test(u.pathname)) return false;
+
     const lowerUrl = url.toLowerCase();
     const badKeywords = [
       'click', 'track', 'openpixel', 'sendgrid', 'unsubscribe', 'optout',
       'newsletter', 'subscribe', 'w3.org', 'doubleclick', 'googlesyndication',
       'googleadservices', 'mailgun', 'mandrill', 'mjml', 'github.com/login',
-      'linkedin.com/legal', 'linkedin.com/help', 'linkedin.com/settings',
+      'brandview-pixel',
     ];
     if (badKeywords.some(kw => lowerUrl.includes(kw))) return false;
-    return u.protocol === 'https:';
+    return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Strip volatile per-send tracking params so the same posting/page linked
+ * from different emails normalizes to one URL for de-duplication. LinkedIn's
+ * /jobs/view/{id} links are already stable and unaffected; this mainly
+ * matters for any URL that still carries a query string after isCleanUrl.
+ * @param {string} url
+ * @returns {string}
+ */
+export function normalizeTrackingUrl(url) {
+  try {
+    const u = new URL(url);
+    const TRACKING_PARAMS = [
+      'lipi', 'midtoken', 'midsig', 'trk', 'trkemail', 'eid', 'otptoken',
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+      'refid', 'ref_id', 'trackingid', 'clickid',
+    ];
+    for (const key of [...u.searchParams.keys()]) {
+      if (TRACKING_PARAMS.includes(key.toLowerCase())) u.searchParams.delete(key);
+    }
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return url;
   }
 }
 

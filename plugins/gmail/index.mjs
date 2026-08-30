@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import {
   extractUrls, isCleanUrl, isAuthenticEmail, parseRoleAtCompany,
-  getMessageBody, companyFromUrl,
+  getMessageBody, companyFromUrl, normalizeTrackingUrl,
 } from './_helpers.mjs';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -125,7 +125,7 @@ export default {
       }
 
       const seed = parseRoleAtCompany(subject);
-      const cleanUrls = extractUrls(getMessageBody(msg.payload)).filter(isCleanUrl);
+      const cleanUrls = extractUrls(getMessageBody(msg.payload)).filter(isCleanUrl).map(normalizeTrackingUrl);
       for (const url of cleanUrls) {
         if (seenUrls.has(url)) continue;
         seenUrls.add(url);
