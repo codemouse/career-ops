@@ -51,15 +51,40 @@ export function isCleanUrl(url) {
     }
     if (/(^|\.)licdn\.com$/i.test(u.hostname)) return false; // profile/company-logo image CDN, never a posting
     // Glassdoor's own email chrome: brand/tracking-pixel endpoint and static
-    // logo/icon assets served from the same domain as real job links.
-    if (/(^|\.)glassdoor\.com$/i.test(u.hostname) && /^\/(brand-views|assets\/)/i.test(u.pathname)) return false;
+    // logo/icon assets served from the same domain as real job links. A
+    // per-send subdomain (mail8.glassdoor.com, ...) carries the same paths.
+    if (/(^|\.)glassdoor\.com$/i.test(u.hostname) && /^\/(brand-views|assets\/|wf\/open)/i.test(u.pathname)) return false;
     // Substack's generic click-tracking redirect wrapper — never a posting
     // itself, just how any link in a Substack email routes through their
     // domain. Other substack.com paths are left alone in case a real job
     // board is hosted there.
     if (u.hostname.toLowerCase() === 'substack.com' && u.pathname.startsWith('/redirect/')) return false;
+    if (u.hostname.toLowerCase() === 'link.mail.beehiiv.com') return false; // Beehiiv's click-tracking redirect wrapper
+    // Lensa/Jobtailor digest emails: every one of these hosts is tracking
+    // infrastructure (Mailgun click-tracking, an impression pixel, an
+    // open/click measurement beacon, a "message opened" webhook) — never a
+    // job posting. Confirmed by inspection: no other lensa.com URL shape
+    // exists in this plugin's output.
+    if (/(^|\.)lensa\.com$/i.test(u.hostname)) return false;
+    // Generic email-service-provider open-tracking pixel: a per-send
+    // subdomain hitting /wf/open (SparkPost) is never a job posting,
+    // regardless of which sender's domain it's fronting.
+    if (/^\/wf\/open\b/i.test(u.pathname)) return false;
+    // A bare-digits or hex-prefixed subdomain of a known ESP is a per-send
+    // tracking host (ConvertKit et al.), not a job board's own domain.
+    if (/^[0-9a-f]{6,}\.open\.[a-z0-9.-]+-mail\d*\.com$/i.test(u.hostname)) return false;
     // Belt-and-suspenders for any board: an image asset is never a posting.
     if (/\.(png|jpe?g|gif|svg|webp|ico)(\?|$)/i.test(u.pathname)) return false;
+    // "Get our app" store badges and app-install-attribution links in email
+    // footers — never a posting, but they inherit the email's subject-line
+    // title/company just like the real link, so they show up as look-alike
+    // duplicate rows for the same job.
+    const APP_INSTALL_HOSTS = /^(apps\.microsoft\.com|itunes\.apple\.com|apps\.apple\.com|play\.google\.com|app\.appsflyer\.com)$/i;
+    if (APP_INSTALL_HOSTS.test(u.hostname)) return false;
+    // Sender's own social-media footer icons (e.g. adzuna's Twitter/Facebook
+    // page), and their static asset CDN.
+    if (/^(www\.)?(twitter|facebook)\.com$/i.test(u.hostname)) return false;
+    if (/(^|\.)kxcdn\.com$/i.test(u.hostname)) return false;
 
     const lowerUrl = url.toLowerCase();
     const badKeywords = [
