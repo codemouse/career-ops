@@ -59,6 +59,12 @@ export function isCleanUrl(url) {
     if (/(^|\.)glassdoor\.com$/i.test(u.hostname)) {
       return u.pathname.startsWith('/partner/jobListing.htm') && u.searchParams.has('jobListingId');
     }
+    // Adzuna: same approach. A real posting is /land/ad/{id}; everything
+    // else on the domain (search results, saved-alert management, the
+    // blog, the bare homepage) is email chrome, not a posting.
+    if (/(^|\.)adzuna\.com$/i.test(u.hostname)) {
+      return u.pathname.startsWith('/land/ad/');
+    }
     // Substack's generic click-tracking redirect wrapper — never a posting
     // itself, just how any link in a Substack email routes through their
     // domain. Other substack.com paths are left alone in case a real job
