@@ -39,14 +39,25 @@
  * --all       also re-check rows that already carry company/role/location
  *             (default: only rows missing at least one of those)
  * --dry-run   print what would change, write nothing
- * --throttle  jittered delay between page loads (default 800ms base)
+ * --throttle  jittered delay between page loads (default 5000ms base — see
+ *             below; pass a lower value to go faster at the cost of more
+ *             rows coming back as an unresolved bot-challenge)
  */
+
+// Glassdoor/Adzuna's anti-bot WAF appears to flag the session after just a
+// couple of rapid automated hits and then blocks everything after — headed
+// retry included, since it's rate-based, not purely a headless-detection
+// signal. check-liveness.mjs found 5000ms base was needed for the same
+// class of WAF (pracuj.pl's Cloudflare); 800ms measured close to 0%
+// resolved on a live run here. This isn't a guaranteed fix — a big batch
+// can still end up throttled — just a large reduction in how fast it gets
+// there.
 
 import { chromium } from 'playwright';
 import { readFileSync, writeFileSync } from 'fs';
 import { pathToFileURL } from 'url';
 import { withPipelineLock } from './pipeline-lock.mjs';
-import { sleep, jitteredDelayMs, LIVENESS_CONTEXT_OPTIONS } from './liveness-browser.mjs';
+import { sleep, jitteredDelayMs, LIVENESS_CONTEXT_OPTIONS, createHeadedPageProvider } from './liveness-browser.mjs';
 import { parseRow, serializeRow } from './enrich-linkedin-pipeline.mjs';
 
 const PIPELINE_PATH = 'data/pipeline.md';
@@ -58,11 +69,27 @@ function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
+// Adzuna's and Glassdoor's own alert-email chrome (search results, alert
+// management, the blog/bare homepage, member/account/privacy settings pages)
+// shares the same host as real postings but is never a posting itself —
+// queuing it just burns a page load that extract{Adzuna,Glassdoor}() can
+// never resolve into a lead.
+function isJobPostingUrl(url, host) {
+  try {
+    const u = new URL(url);
+    if (host === 'adzuna.com') return u.pathname.startsWith('/land/ad/');
+    if (host === 'glassdoor.com') return u.pathname.startsWith('/partner/jobListing.htm') && u.searchParams.has('jobListingId');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseArgs(argv) {
   const dryRun = argv.includes('--dry-run');
   const all = argv.includes('--all');
   const throttleArg = argv.find((a) => a === '--throttle' || a.startsWith('--throttle='));
-  const throttleBaseMs = throttleArg ? (Number(throttleArg.split('=')[1]) || 800) : 800;
+  const throttleBaseMs = throttleArg ? (Number(throttleArg.split('=')[1]) || 5000) : 5000;
   return { dryRun, all, throttleBaseMs };
 }
 
@@ -78,6 +105,7 @@ function findEnrichableRows(lines) {
     const url = positional[0] || '';
     const host = hostOf(url);
     if (!SUPPORTED_HOSTS.has(host)) continue;
+    if (!isJobPostingUrl(url, host)) continue;
     const company = (positional[1] || '').trim();
     const role = (positional[2] || '').trim();
     const location = (positional[3] || '').trim();
@@ -87,10 +115,18 @@ function findEnrichableRows(lines) {
   return { pendingStart, processedStart, rows };
 }
 
-async function extract(page, url, host) {
-  let response;
+// Glassdoor and Adzuna both front a JS/Cloudflare-style anti-bot challenge
+// that headless Chromium essentially never clears (confirmed live: 0/16
+// resolved in a headless-only run) — a real, headed browser window gets
+// through it, same as check-liveness.mjs already relies on for pracuj.pl et
+// al. Only these two "bot-challenge did not clear" reasons are worth a
+// second attempt in a headed page; a genuinely unparsed page layout or a
+// closed posting won't change on retry.
+const CHALLENGE_REASON = 'bot-challenge did not clear';
+
+async function extractOnce(page, url, host) {
   try {
-    response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
     await page.waitForTimeout(1500); // let client-side redirects/hydration settle
   } catch (e) {
     return { ok: false, reason: `navigation error: ${e.message}` };
@@ -104,6 +140,20 @@ async function extract(page, url, host) {
   if (host === 'adzuna.com') return extractAdzuna(finalUrl, title, innerText);
   if (host === 'glassdoor.com') return extractGlassdoor(title);
   return { ok: false, reason: 'unsupported host' };
+}
+
+async function extract(page, url, host, getHeadedPage) {
+  const first = await extractOnce(page, url, host);
+  if (first.ok || first.closed || first.reason !== CHALLENGE_REASON || !getHeadedPage) {
+    return first;
+  }
+  const headedPage = await getHeadedPage();
+  if (!headedPage) return first;
+  const second = await extractOnce(headedPage, url, host);
+  if (!second.ok && !second.closed && second.reason === CHALLENGE_REASON) {
+    return { ...second, reason: `${second.reason} (headed retry also blocked)` };
+  }
+  return second;
 }
 
 function extractFractionalJobs(innerText) {
@@ -172,17 +222,23 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext(LIVENESS_CONTEXT_OPTIONS);
   const page = await context.newPage();
+  // Headed fallback for Glassdoor/Adzuna's anti-bot challenge, same pattern
+  // as check-liveness.mjs. Lazily launched (only on first challenge hit);
+  // if no display is available get() degrades to null and extract() just
+  // keeps the headless (challenge-blocked) result.
+  const headed = createHeadedPageProvider(chromium);
 
   const results = [];
   for (let i = 0; i < targets.length; i++) {
     const row = targets[i];
-    const r = await extract(page, row.url, row.host);
+    const r = await extract(page, row.url, row.host, () => headed.get());
     results.push({ row, r });
     const icon = r.ok ? '✅' : (r.closed ? '❌' : '⚠️');
     console.log(`${icon} ${row.host.padEnd(20)} ${row.url.slice(0, 70)}`);
     const wait = i < targets.length - 1 ? jitteredDelayMs(throttleBaseMs) : 0;
     if (wait) await sleep(wait);
   }
+  await headed.close();
   await browser.close();
 
   let enriched = 0, failed = 0;
