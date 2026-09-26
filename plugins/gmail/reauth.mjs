@@ -15,7 +15,7 @@ import { createServer } from 'http';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { loadDotenvOnce } from '../_engine.mjs';
+import { loadDotenvOnce, clearPluginAuthStatus } from '../_engine.mjs';
 
 await loadDotenvOnce();
 
@@ -27,7 +27,8 @@ const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 // Off by default so the plain terminal flow (`node plugins/gmail/reauth.mjs`)
 // is unchanged — printing the token and letting the user paste it themselves.
 const writeEnv = process.argv.includes('--write-env');
-const ENV_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.env');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ENV_PATH = path.join(ROOT, '.env');
 
 /** Replace GMAIL_REFRESH_TOKEN=... in .env if present, else append it. Preserves every other line verbatim. */
 function updateEnvRefreshToken(token) {
@@ -101,6 +102,10 @@ const server = createServer(async (req, res) => {
 
     if (writeEnv) {
       updateEnvRefreshToken(data.refresh_token);
+      // The new token is live now, so drop the stale needs-reauth flag instead
+      // of waiting for the next ingest run to clear it. Terminal mode skips
+      // this: the token isn't in .env until the user pastes it.
+      clearPluginAuthStatus(ROOT, 'gmail');
       console.log('✓ .env updated with the new GMAIL_REFRESH_TOKEN.\n');
     } else {
       console.log('✓ New refresh token:\n');

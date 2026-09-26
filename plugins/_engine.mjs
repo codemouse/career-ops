@@ -690,6 +690,16 @@ function recordAuthStatus(root, id, ok, errorMessage) {
   try { writeFileSync(p, JSON.stringify(state, null, 2) + '\n'); } catch { /* best-effort */ }
 }
 
+/**
+ * Clear a plugin's "needs re-auth" signal after credentials were replaced
+ * out-of-band (e.g. gmail/reauth.mjs --write-env). Without this the flag only
+ * clears on the next successful hook run, so the dashboard keeps warning after
+ * a re-auth that already worked. Same fail-open contract as recordAuthStatus.
+ */
+export function clearPluginAuthStatus(root, id) {
+  recordAuthStatus(root, id, true);
+}
+
 /** Read current plugin auth-status signals (id -> {needsReauth, error, at}). Never throws. */
 export function readPluginAuthStatus(root) {
   try { return JSON.parse(readFileSync(pluginStatusPath(root), 'utf8')); } catch { return {}; }
