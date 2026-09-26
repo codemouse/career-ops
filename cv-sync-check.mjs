@@ -15,10 +15,27 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 import { getCareerOpsRoot } from './path-resolver.mjs';
+import { validateFlags } from './lib/cli-flags.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CODE_ROOT = __dirname;
+const CODE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
+
+// ── CLI flags + help ────────────────────────────────────────────────
+//
+// docs/SCRIPTS.md lists `node cv-sync-check.mjs` as a runnable command, but the
+// script read no arguments at all: a mistyped flag was ignored and the checks
+// ran anyway, so `--hlep` looked like a successful run of whatever the caller
+// meant (#3565). KNOWN_FLAGS is exactly --help/-h because that is every flag
+// this file parses. Unrecognized flags exit 1 naming the flag; --help/-h print
+// USAGE and exit 0.
+
+const KNOWN_FLAGS = ['--help', '-h'];
+
+const USAGE = `Usage:
+  node cv-sync-check.mjs            # run the cv.md / profile.yml / prompt checks
+  node cv-sync-check.mjs --help|-h  # print this usage block and exit`;
+
+validateFlags(process.argv.slice(2), KNOWN_FLAGS, USAGE);
 
 const warnings = [];
 const errors = [];
@@ -51,9 +68,9 @@ if (!existsSync(profilePath)) {
 
 // 3. Check for hardcoded metrics in prompt files
 const filesToCheck = [
-  { path: join(projectRoot, 'modes', '_shared.md'), name: '_shared.md' },
-  { path: join(projectRoot, 'modes', '_writing.md'), name: '_writing.md' },
-  { path: join(projectRoot, 'batch', 'batch-prompt.md'), name: 'batch-prompt.md' },
+  { path: join(CODE_ROOT, 'modes', '_shared.md'), name: '_shared.md' },
+  { path: join(CODE_ROOT, 'modes', '_writing.md'), name: '_writing.md' },
+  { path: join(CODE_ROOT, 'batch', 'batch-prompt.md'), name: 'batch-prompt.md' },
 ];
 
 // Pattern: numbers that look like hardcoded metrics (e.g., "170+ hours", "90% self-service")

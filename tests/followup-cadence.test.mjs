@@ -1,10 +1,13 @@
 /**
- * followup-cadence.test.mjs — tests for computeNextFollowupDate cadence selection.
+ * tests/followup-cadence.test.mjs — tests for computeNextFollowupDate cadence selection.
  *
  * Focuses on the `responded` branch, where the first follow-up after a recruiter
  * reply must be scheduled with `responded_initial`, not `responded_subsequent`.
  *
- * Run: node followup-cadence.test.mjs
+ * Run: node test-all.mjs --only followup-cadence
+ *      Running the file directly prints the same ✅/❌ lines, but a
+ *      discovered suite reports through the shared counters and never
+ *      exits — so a direct run returns 0 even when assertions fail.
  */
 
 import { dirname, join } from 'path';
@@ -27,13 +30,29 @@ const CUSTOM_CADENCE_PROFILE = join(ROOT, 'tests', 'fixtures', 'profile-custom-c
 // statement in this file, so a static import would run the module before this
 // assignment and the pin would do nothing.
 //
-// Restored at the end of the file. As a standalone script this pin died with
-// the process; discovered suites share ONE process, so leaving it set leaked
-// this fixture into every later suite — providers/_profile-keywords.mjs reads
-// CAREER_OPS_PROFILE at module scope, so three provider suites read this
-// cadence fixture instead of the profile their own tmpdir set up (#3306).
+// The pin is scoped to the import and restored in a finally, so it is live for
+// exactly the statement that needs it. As a standalone script it died with the
+// process; discovered suites share ONE process, so leaving it set leaked this
+// fixture forward — providers/_profile-keywords.mjs reads CAREER_OPS_PROFILE at
+// module scope, and three provider suites then read this cadence fixture
+// instead of the profile their own tmpdir had just written (#3306).
+//
+// Restoring here rather than at the end of the file is what makes that
+// airtight: a throw anywhere below would skip a trailing restore, and
+// discovery CONTAINS the throw and runs the next suite regardless — so the
+// leak would come back on precisely the run that was already going wrong.
+// Nothing below needs the variable: every later call passes profilePath
+// explicitly.
 const PRIOR_PROFILE_ENV = process.env.CAREER_OPS_PROFILE;
 process.env.CAREER_OPS_PROFILE = DEFAULT_CADENCE_PROFILE;
+
+let cadence;
+try {
+  cadence = await import('../followup-cadence.mjs');
+} finally {
+  if (PRIOR_PROFILE_ENV === undefined) delete process.env.CAREER_OPS_PROFILE;
+  else process.env.CAREER_OPS_PROFILE = PRIOR_PROFILE_ENV;
+}
 
 const {
   computeNextFollowupDate,
@@ -46,7 +65,7 @@ const {
   resolveCadenceConfig,
   loadProfileCadence,
   parseAppliedDaysOverride,
-} = await import('../followup-cadence.mjs');
+} = cadence;
 
 
 function eq(label, actual, expected) {
@@ -249,7 +268,19 @@ eq(
 );
 
 
-// Undo the CAREER_OPS_PROFILE pin set at the top: this process outlives the
-// suite, and the next one must see the environment it would have had.
-if (PRIOR_PROFILE_ENV === undefined) delete process.env.CAREER_OPS_PROFILE;
-else process.env.CAREER_OPS_PROFILE = PRIOR_PROFILE_ENV;
+
+// ── parseAppliedDate: a requisition hash is not a row reference ──────────────
+// `isCrossReferencedMention` skips an apply-date that is cited ABOUT ANOTHER
+// ROW (`see #12, applied 2026-09-01`). A `#` preceded by a requisition label
+// is the row's own req number, not a row reference, and REQ_LABELLED_HASH_RE
+// shares tracker-parse.mjs's label vocabulary so the two never disagree. The
+// `r_` label was missing from that list (PR #4267 review), so
+// `R_#1311 Applied 2026-09-01` lost its own applied date while the equivalent
+// `req #1311` kept it.
+console.log('\nfollowup-cadence.mjs — parseAppliedDate vs requisition hashes');
+for (const label of ['R_#1311', 'r_#1311', 'req #1311', 'Req #1311']) {
+  eq(`parseAppliedDate: ${label} is the row's own requisition, so its applied date is kept`,
+    cadence.parseAppliedDate(`${label} Applied 2026-09-01`), '2026-09-01');
+}
+eq('parseAppliedDate: an unlabelled #N before the date is a row reference, so the date is not this row\'s',
+  cadence.parseAppliedDate('Sibling #1311 Applied 2026-09-01'), null);
